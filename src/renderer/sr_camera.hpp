@@ -18,7 +18,7 @@ struct camera
 
     void recalculateViewMatrix() const
     {
-        mat4 cam_rm = rotationMatrix(to_radians(_rotation.x), to_radians(_rotation.y), to_radians(_rotation.z));
+        mat4 cam_rm = rotationMatrix(_rotation.x,_rotation.y, _rotation.z);
         mat4 cam_tm = translationMatrix(vec3(-_position.x, -_position.y, -_position.z));
         _viewMatrix = cam_rm * cam_tm;
         _viewDirty = false;

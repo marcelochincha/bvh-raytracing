@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <vector>
+#include <algorithm>
 #include <renderer/sr_camera.hpp>
 #include <renderer/sr_primitives.hpp>
 #include <renderer/sr_texture.hpp>
@@ -42,6 +43,12 @@ struct render_coord
 {
     vec3 p; // screen position
     vec3 t; // texture coord
+};
+
+struct ClipVertex
+{
+    vec4 pos; // clip-space position
+    vec2 uv;  // raw uv (no division by w). Perspective correction is applied later.
 };
 
 inline void sort_vertices_by_y(vec3 &v0, vec3 &v1, vec3 &v2)
@@ -165,7 +172,7 @@ void render_flat_triangle(framebuffer &fb, vec3 v0, vec3 v1, vec3 v2, uint32_t c
                 continue; // degenerate horizontal span
             }
             float z = z1 + (z2 - z1) * ((x - x1) / denom);
-            if (x >= 0 && x < fb.width && y >= 0 && y < fb.height && z >= -1 && z <= 1 && z < fb.depthBuffer[y * fb.width + x])
+            if (z < fb.depthBuffer[y * fb.width + x])
             {
 
                 // Brightness adjustment
@@ -209,31 +216,18 @@ void draw_line(framebuffer &fb, int x0, int y0, int x1, int y1, uint32_t color)
 void render_triangle_lines(framebuffer &fb, vec3 v0, vec3 v1, vec3 v2, uint32_t color)
 {
     sort_vertices_by_y(v0, v1, v2);
-    draw_line(fb, static_cast<int>(std::round(v0.x)), static_cast<int>(std::round(v0.y)),
-              static_cast<int>(std::round(v1.x)), static_cast<int>(std::round(v1.y)), color);
-    draw_line(fb, static_cast<int>(std::round(v1.x)), static_cast<int>(std::round(v1.y)),
-              static_cast<int>(std::round(v2.x)), static_cast<int>(std::round(v2.y)), color);
-    draw_line(fb, static_cast<int>(std::round(v2.x)), static_cast<int>(std::round(v2.y)),
-              static_cast<int>(std::round(v0.x)), static_cast<int>(std::round(v0.y)), color);
+    draw_line(fb, v0.x, v0.y,v1.x,v1.y, color);
+    draw_line(fb, v1.x, v1.y, v2.x, v2.y, color);
+    draw_line(fb, v2.x, v2.y, v0.x, v0.y, color);
 }
 
-void render_texturized_triangle(framebuffer &fb, render_coord cv0, render_coord cv1, render_coord cv2, texture &tex)
+void render_texturized_triangle(framebuffer &fb, render_coord cv0, render_coord cv1, render_coord cv2, texture &tex, bool use_depth = true)
 {
     sort_render_coord_by_y(cv0, cv1, cv2);
     int y_start = std::ceil(cv0.p.y);
     int y_end = std::floor(cv2.p.y);
 
     // GET THE DIFERENCE OF MIN AND MAX Y
-
-    int height = abs(cv0.p.y - cv2.p.y);
-    int width = abs(std::max(std::max(cv0.p.x, cv1.p.x), cv2.p.x) - std::min(std::min(cv0.p.x, cv1.p.x), cv2.p.x));
-    unsigned int area = width * height;
-    // NOTE: previously triangles were skipped when their projected bounding-box
-    // area was >= framebuffer area. That is too aggressive (especially when
-    // the camera is inside a large cube) and causes faces to disappear.
-    // We keep the area value for diagnostics but do not skip here.
-    // printf("Triangle buffer area %d\n", int(width * height));
-
     vec3 &v0 = cv0.p;
     vec3 &v1 = cv1.p;
     vec3 &v2 = cv2.p;
@@ -277,7 +271,7 @@ void render_texturized_triangle(framebuffer &fb, render_coord cv0, render_coord 
                 continue; // avoid divide by zero for narrow spans
             }
             float z = z1 + (z2 - z1) * ((x - x1) / denom);
-            if (x >= 0 && x < fb.width && y >= 0 && y < fb.height && z >= -1 && z <= 1 && z < fb.depthBuffer[y * fb.width + x])
+            if (z < fb.depthBuffer[y * fb.width + x])
             {
                 uint32_t color = 0xFFFFFFFF; // White for now
                 vec3 bar = get_barycentric_coords(x, y, v0, v1, v2);
@@ -288,124 +282,232 @@ void render_texturized_triangle(framebuffer &fb, render_coord cv0, render_coord 
                 float s = uz / z_inv;
                 float t = vz / z_inv;
 
-                int t_x = int(s * (tex.width - 1));
-                int t_y = int(t * (tex.height - 1));
+                // Check if uvs can be outside 0-1 range
+                if (s < 0.0f || s > 1.0f || t < 0.0f || t > 1.0f)
+                    continue;
+
+                int t_x = int(s * (tex.width));
+                int t_y = int(t * (tex.height));
+
+                // printf("Tex coords: %f, %f -> %d, %d\n", s, t, t_x, t_y);
+
                 int target = t_y * tex.width + t_x;
                 if (target < 0 || target >= tex.width * tex.height)
                     continue;
                 color = tex.data[target];
                 // Brightness adjustment
                 fb.colorBuffer[y * fb.width + x] = color; // Simple brightness based on depth
-                fb.depthBuffer[y * fb.width + x] = z;
+                if (use_depth)
+                    fb.depthBuffer[y * fb.width + x] = z;
             }
         }
     }
 }
 
-// draw call, not optimized but functional
-void render_mesh(framebuffer &fb, const mesh &m, const camera &cam, uint32_t color)
+inline ClipVertex lerp_clip(const ClipVertex &a, const ClipVertex &b, float t)
 {
-    // Matrix for MODEL -> VIEW -> PROJECTION
-    mat4 mvp = cam.projection() * cam.view() * m.modelMatrix;
-    for (const auto &tri : m.faces)
-    {
-        vec4 clip_v0 = mvp * m.vertices[tri.v0].p; // vec4(m.vertices[tri.v0].p.x, m.vertices[tri.v0].p.y, m.vertices[tri.v0].p.z, 1.0f);
-        vec4 clip_v1 = mvp * m.vertices[tri.v1].p; // vec4(m.vertices[tri.v1].p.x, m.vertices[tri.v1].p.y, m.vertices[tri.v1].p.z, 1.0f);
-        vec4 clip_v2 = mvp * m.vertices[tri.v2].p; // vec4(m.vertices[tri.v2].p.x, m.vertices[tri.v2].p.y, m.vertices[tri.v2].p.z, 1.0f);
-
-        // If all clip.w <= 0 then the whole triangle is behind the camera -> skip.
-        // Use && so only triangles with ALL vertices behind the camera are skipped.
-        if (clip_v0.w <= 0 && clip_v1.w <= 0 && clip_v2.w <= 0)
-        {
-            continue; // Entire triangle is behind the camera
-        }
-        // Perform perspective divide to get NDC
-        vec4 ndc_v0 = clip_v0 / clip_v0.w;
-        vec4 ndc_v1 = clip_v1 / clip_v1.w;
-        vec4 ndc_v2 = clip_v2 / clip_v2.w;
-
-        // Transform NDC to screen space
-        vec3 screen_v0 = convert_to_fb(fb, ndc_v0);
-        vec3 screen_v1 = convert_to_fb(fb, ndc_v1);
-        vec3 screen_v2 = convert_to_fb(fb, ndc_v2);
-
-        // Rasterize the triangle
-        render_flat_triangle(fb, screen_v0, screen_v1, screen_v2, color);
-    }
+    ClipVertex r;
+    r.pos = a.pos + (b.pos - a.pos) * t;
+    r.uv = a.uv + (b.uv - a.uv) * t;
+    return r;
 }
 
+std::vector<ClipVertex> clip_against_plane(const std::vector<ClipVertex> &poly, float (*inside_fn)(const ClipVertex &))
+{
+    std::vector<ClipVertex> out;
+    if (poly.empty())
+        return out;
+    ClipVertex S = poly.back();
+    float dS = inside_fn(S);
+    for (const auto &E : poly)
+    {
+        float dE = inside_fn(E);
+        bool S_in = dS <= 0.0f;
+        bool E_in = dE <= 0.0f;
+        if (S_in && E_in)
+        {
+            out.push_back(E);
+        }
+        else if (S_in && !E_in)
+        {
+            float denom = dS - dE;
+            if (std::abs(denom) > 1e-6f)
+            {
+                float t = dS / denom;
+                out.push_back(lerp_clip(S, E, t));
+            }
+        }
+        else if (!S_in && E_in)
+        {
+            float denom = dS - dE;
+            if (std::abs(denom) > 1e-6f)
+            {
+                float t = dS / denom;
+                out.push_back(lerp_clip(S, E, t));
+            }
+            out.push_back(E);
+        }
+        S = E;
+        dS = dE;
+    }
+    return out;
+}
+
+
+// Render wireframe mesh
 void render_wireframe(framebuffer &fb, const mesh &m, const camera &cam, uint32_t color)
 {
     // Matrix for MODEL -> VIEW -> PROJECTION
-    mat4 mvp = cam.projection() * cam.view() * m.modelMatrix;
-    int cnt = 1;
-    for (const auto &tri : m.faces)
+    mat4 mvp = cam.projection() * cam.view() * m.modelMatrix();
+    for (int index = 0; index < m.faces.size(); ++index)
     {
-        vec4 clip_v0 = mvp * m.vertices[tri.v0].p;
-        vec4 clip_v1 = mvp * m.vertices[tri.v1].p;
-        vec4 clip_v2 = mvp * m.vertices[tri.v2].p;
+        const triangle &tri = m.faces[index];
 
-        if (clip_v0.w <= 0.01 || clip_v1.w <= 0.01 || clip_v2.w <= 0.01)
+        ClipVertex v0{mvp * m.vertices[tri.v0].p, vec2(m.vertices[tri.v0].t.x, m.vertices[tri.v0].t.y)};
+        ClipVertex v1{mvp * m.vertices[tri.v1].p, vec2(m.vertices[tri.v1].t.x, m.vertices[tri.v1].t.y)};
+        ClipVertex v2{mvp * m.vertices[tri.v2].p, vec2(m.vertices[tri.v2].t.x, m.vertices[tri.v2].t.y)};
+
+        std::vector<ClipVertex> poly = {v0, v1, v2};
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return v.pos.x - v.pos.w; }); // x <=  w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return -v.pos.x - v.pos.w; }); // x >= -w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return v.pos.y - v.pos.w; }); // y <=  w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return -v.pos.y - v.pos.w; }); // y >= -w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return v.pos.z - v.pos.w; }); // z <=  w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return -v.pos.z - v.pos.w; }); // z >= -w (near)
+
+        if (poly.size() < 3)
+            continue;
+
+        ClipVertex base = poly[0];
+        for (size_t i = 1; i + 1 < poly.size(); ++i)
         {
-            continue; // Entire triangle is behind the camera
+            ClipVertex a = poly[i];
+            ClipVertex b = poly[i + 1];
+
+            vec4 ndc_v0 = base.pos / base.pos.w;
+            vec4 ndc_v1 = a.pos / a.pos.w;
+            vec4 ndc_v2 = b.pos / b.pos.w;
+
+            vec3 screen_v0 = convert_to_fb(fb, ndc_v0);
+            vec3 screen_v1 = convert_to_fb(fb, ndc_v1);
+            vec3 screen_v2 = convert_to_fb(fb, ndc_v2);
+            render_triangle_lines(fb, screen_v0, screen_v1, screen_v2, color * (color + 7 * (index++ + 1)));
         }
-        //if (cnt == 1)
-        //{
-        //    std::cout << "Rendering face " << cnt << "\n";
-        //    std::cout << "Clip V0: (" << clip_v0.x << ", " << clip_v0.y << ", " << clip_v0.z << ", " << clip_v0.w << ")\n";
-        //    std::cout << "Clip V1: (" << clip_v1.x << ", " << clip_v1.y << ", " << clip_v1.z << ", " << clip_v1.w << ")\n";
-        //    std::cout << "Clip V2: (" << clip_v2.x << ", " << clip_v2.y << ", " << clip_v2.z << ", " << clip_v2.w << ")\n";
-        //}
-        // Perform perspective divide to get NDC
-        vec4 ndc_v0 = clip_v0 / clip_v0.w;
-        vec4 ndc_v1 = clip_v1 / clip_v1.w;
-        vec4 ndc_v2 = clip_v2 / clip_v2.w;
+    }
+}
 
-        // Transform NDC to screen space
-        vec3 screen_v0 = convert_to_fb(fb, ndc_v0);
-        vec3 screen_v1 = convert_to_fb(fb, ndc_v1);
-        vec3 screen_v2 = convert_to_fb(fb, ndc_v2);
+// Render flat mesh
+//  draw call, not optimized but functional
+void render_flat_mesh(framebuffer &fb, const mesh &m, const camera &cam, uint32_t color)
+{
+    // Matrix for MODEL -> VIEW -> PROJECTION
+    mat4 mvp = cam.projection() * cam.view() * m.modelMatrix();
+    for (int index = 0; index < m.faces.size(); ++index)
+    {
+        const triangle &tri = m.faces[index];
 
-        // Draw edges
-        render_triangle_lines(fb, screen_v0, screen_v1, screen_v2, color * (color + 7 * cnt++));
+        ClipVertex v0{mvp * m.vertices[tri.v0].p, vec2(m.vertices[tri.v0].t.x, m.vertices[tri.v0].t.y)};
+        ClipVertex v1{mvp * m.vertices[tri.v1].p, vec2(m.vertices[tri.v1].t.x, m.vertices[tri.v1].t.y)};
+        ClipVertex v2{mvp * m.vertices[tri.v2].p, vec2(m.vertices[tri.v2].t.x, m.vertices[tri.v2].t.y)};
+
+        std::vector<ClipVertex> poly = {v0, v1, v2};
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return v.pos.x - v.pos.w; }); // x <=  w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return -v.pos.x - v.pos.w; }); // x >= -w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return v.pos.y - v.pos.w; }); // y <=  w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return -v.pos.y - v.pos.w; }); // y >= -w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return v.pos.z - v.pos.w; }); // z <=  w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return -v.pos.z - v.pos.w; }); // z >= -w (near)
+
+        if (poly.size() < 3)
+            continue;
+
+        ClipVertex base = poly[0];
+        for (size_t i = 1; i + 1 < poly.size(); ++i)
+        {
+            ClipVertex a = poly[i];
+            ClipVertex b = poly[i + 1];
+
+            vec4 ndc_v0 = base.pos / base.pos.w;
+            vec4 ndc_v1 = a.pos / a.pos.w;
+            vec4 ndc_v2 = b.pos / b.pos.w;
+
+            vec3 screen_v0 = convert_to_fb(fb, ndc_v0);
+            vec3 screen_v1 = convert_to_fb(fb, ndc_v1);
+            vec3 screen_v2 = convert_to_fb(fb, ndc_v2);
+
+            if (tri.colorIndex < m.colors.size())
+            {
+                color = m.colors[tri.colorIndex];
+            }
+            render_flat_triangle(fb, screen_v0, screen_v1, screen_v2, color);
+        }
     }
 }
 
 // Render textured mesh
-void render_textured_mesh(framebuffer &fb, const mesh &m, const camera &cam, texture &tex)
+void render_textured_mesh(framebuffer &fb, const mesh &m, const camera &cam, texture &tex, bool use_depth = true)
 {
     // Matrix for MODEL -> VIEW -> PROJECTION
-    mat4 mvp = cam.projection() * cam.view() * m.modelMatrix;
+    mat4 mvp = cam.projection() * cam.view() * m.modelMatrix();
     for (int index = 0; index < m.faces.size(); ++index)
     {
         const triangle &tri = m.faces[index];
-        vec4 clip_v0 = mvp * m.vertices[tri.v0].p;
-        vec4 clip_v1 = mvp * m.vertices[tri.v1].p;
-        vec4 clip_v2 = mvp * m.vertices[tri.v2].p;
 
-        // if (clip_v0.w <= 0.1 || clip_v1.w <= 0.1 || clip_v2.w <= 0.1)
-        //{
-        //     continue; // Entire triangle is behind the camera
-        // }
+        ClipVertex v0{mvp * m.vertices[tri.v0].p, vec2(m.vertices[tri.v0].t.x, m.vertices[tri.v0].t.y)};
+        ClipVertex v1{mvp * m.vertices[tri.v1].p, vec2(m.vertices[tri.v1].t.x, m.vertices[tri.v1].t.y)};
+        ClipVertex v2{mvp * m.vertices[tri.v2].p, vec2(m.vertices[tri.v2].t.x, m.vertices[tri.v2].t.y)};
 
-        // Perform perspective divide to get NDC
-        vec4 ndc_v0 = clip_v0 / clip_v0.w;
-        vec4 ndc_v1 = clip_v1 / clip_v1.w;
-        vec4 ndc_v2 = clip_v2 / clip_v2.w;
+        std::vector<ClipVertex> poly = {v0, v1, v2};
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return v.pos.x - v.pos.w; }); // x <=  w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return -v.pos.x - v.pos.w; }); // x >= -w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return v.pos.y - v.pos.w; }); // y <=  w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return -v.pos.y - v.pos.w; }); // y >= -w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return v.pos.z - v.pos.w; }); // z <=  w
+        poly = clip_against_plane(poly, [](const ClipVertex &v)
+                                  { return -v.pos.z - v.pos.w; }); // z >= -w (near)
 
-        // Transform NDC to screen space
-        vec3 screen_v0 = convert_to_fb(fb, ndc_v0);
-        vec3 screen_v1 = convert_to_fb(fb, ndc_v1);
-        vec3 screen_v2 = convert_to_fb(fb, ndc_v2);
+        if (poly.size() < 3)
+            continue;
 
-        vec3 uv_v0 = vec3(m.vertices[tri.v0].t.x, m.vertices[tri.v0].t.y, 1.0f) / clip_v0.w;
-        vec3 uv_v1 = vec3(m.vertices[tri.v1].t.x, m.vertices[tri.v1].t.y, 1.0f) / clip_v1.w;
-        vec3 uv_v2 = vec3(m.vertices[tri.v2].t.x, m.vertices[tri.v2].t.y, 1.0f) / clip_v2.w;
+        ClipVertex base = poly[0];
+        for (size_t i = 1; i + 1 < poly.size(); ++i)
+        {
+            ClipVertex a = poly[i];
+            ClipVertex b = poly[i + 1];
 
-        // Prepare vertices with screen positions and texture coordinates
-        render_coord cv0 = {screen_v0, uv_v0};
-        render_coord cv1 = {screen_v1, uv_v1};
-        render_coord cv2 = {screen_v2, uv_v2};
-        render_texturized_triangle(fb, cv0, cv1, cv2, tex);
+            vec4 ndc_v0 = base.pos / base.pos.w;
+            vec4 ndc_v1 = a.pos / a.pos.w;
+            vec4 ndc_v2 = b.pos / b.pos.w;
+
+            vec3 screen_v0 = convert_to_fb(fb, ndc_v0);
+            vec3 screen_v1 = convert_to_fb(fb, ndc_v1);
+            vec3 screen_v2 = convert_to_fb(fb, ndc_v2);
+
+            vec3 uvw0 = vec3(base.uv.x, base.uv.y, 1.0f) / base.pos.w;
+            vec3 uvw1 = vec3(a.uv.x, a.uv.y, 1.0f) / a.pos.w;
+            vec3 uvw2 = vec3(b.uv.x, b.uv.y, 1.0f) / b.pos.w;
+
+            render_coord cv0 = {screen_v0, uvw0};
+            render_coord cv1 = {screen_v1, uvw1};
+            render_coord cv2 = {screen_v2, uvw2};
+            render_texturized_triangle(fb, cv0, cv1, cv2, tex, use_depth);
+        }
     }
 }

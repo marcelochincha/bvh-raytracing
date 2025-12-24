@@ -119,12 +119,12 @@ inline mat4 translationMatrix(const vec3 &translation)
     return result;
 }
 
-inline mat4 rotationMatrix(float r_angle, const vec3 &axis)
+// Returns rotated matrix by axis (axis must be normalized)
+inline mat4 rotationMatrix(float r_angle, const vec3 &n)
 {
     float c = cosf(r_angle);
     float s = sinf(r_angle);
     float omc = 1.0f - c;
-    vec3 n = normalize(axis);
     return mat4(
         n.x * n.x * omc + c, n.x * n.y * omc - n.z * s, n.x * n.z * omc + n.y * s, 0.0f,
         n.y * n.x * omc + n.z * s, n.y * n.y * omc + c, n.y * n.z * omc - n.x * s, 0.0f,
