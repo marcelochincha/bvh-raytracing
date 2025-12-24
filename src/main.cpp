@@ -187,7 +187,7 @@ int main(int argc, char *argv[])
         // render_textured_mesh(fb, skybox, cam, skybox_texture);
         //render_textured_mesh(fb, skybox, cam, skybox_texture, false);
         render_flat_mesh(fb, edificio, cam, 0xFFFFFF00);
-        render_wireframe(fb, edificio, cam, 0xFFFFFF00);
+        //render_wireframe(fb, edificio, cam, 0xFFFFFF00);
         // render_wireframe(fb, floor_mesh, cam, 0xFF00FFFF);
 
         // tHIS SHOULD BE HANDLE ALSO BY THE ENGINE

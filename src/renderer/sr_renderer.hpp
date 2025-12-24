@@ -215,7 +215,6 @@ void draw_line(framebuffer &fb, int x0, int y0, int x1, int y1, uint32_t color)
 
 void render_triangle_lines(framebuffer &fb, vec3 v0, vec3 v1, vec3 v2, uint32_t color)
 {
-    sort_vertices_by_y(v0, v1, v2);
     draw_line(fb, v0.x, v0.y,v1.x,v1.y, color);
     draw_line(fb, v1.x, v1.y, v2.x, v2.y, color);
     draw_line(fb, v2.x, v2.y, v0.x, v0.y, color);
