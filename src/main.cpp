@@ -12,25 +12,42 @@
 // #define W_WIDTH 320
 // #define W_HEIGHT 200
 
+static inline float saturate(float x)
+{
+    return fminf(1.0f, fmaxf(0.0f, x));
+}
+
+float value_ramp_n(float t, int steps)
+{
+    t = saturate(t);
+
+    if (steps <= 1)
+        return 0.0f;
+
+    return roundf(t * (steps - 1)) / (steps - 1);
+}
+
 int main(int argc, char *argv[])
 {
 
-    std::string text_path, model_path;
-    int W_WIDTH, W_HEIGHT;
+    // std::string text_path, model_path;
+    int W_WIDTH = 640, W_HEIGHT = 240;
     //
-    if (argc >= 4)
-    {
-        text_path = std::string(argv[1]);
-        model_path = std::string(argv[2]);
-        W_WIDTH = std::stoi(argv[3]);
-        W_HEIGHT = std::stoi(argv[4]);
-    }
-    else
-    {
-        printf("ARGC =%d\n", argc);
-        std::cout << "Usage: " << argv[0] << " <path_to_texture> <path_to_model> resX resY" << std::endl;
-        return -1;
-    }
+    // if (argc >= 4)
+    //{
+    //    text_path = std::string(argv[1]);
+    //    model_path = std::string(argv[2]);
+    //    W_WIDTH = std::stoi(argv[3]);
+    //    W_HEIGHT = std::stoi(argv[4]);
+    //}
+    // else
+    //{
+    //    printf("ARGC =%d\n", argc);
+    //    std::cout << "Usage: " << argv[0] << " <path_to_texture> <path_to_model> resX resY" << std::endl;
+    //    return -1;
+    //}
+
+    std::cout << "Executable path: " << argv[0] << std::endl;
 
     // Initiate the visual fb
     // First initialize the framebuffer
@@ -56,12 +73,22 @@ int main(int argc, char *argv[])
     // I NEED A camera
     camera cam(vec3(0.0f, 0.0f, 0.0f), vec3(0.0f, 0.0f, 0.0f), 75.0f, float(W_WIDTH) / float(W_HEIGHT), 0.01f, 10000.0f);
 
-    mesh skybox = load_ply(model_path);
-    texture skybox_texture;
-    if (!load_png_texture(text_path, skybox_texture))
+    pixelShaderFunc funcT = [](pixelCoord c0, void *data)
     {
-        return -1;
-    }
+        float brightness = *((float *)data);
+        return brightness_color(0xFFFF0F0F, value_ramp_n(brightness, 6));
+    };
+
+    pixelShader myPXshader{
+        .func = funcT,
+        .data = nullptr};
+
+    // mesh skybox = load_ply(model_path);
+    // texture skybox_texture;
+    // if (!load_png_texture(text_path, skybox_texture))
+    //{
+    //     return -1;
+    // }
     /*
     mesh floor_mesh;
     #define FLOOR_SIZE 3.0f
@@ -79,9 +106,9 @@ int main(int argc, char *argv[])
     };
     */
 
-    skybox.setPosition(vec3(0.0f, 0.0f, 0.0f));
-    skybox.setRotation(vec3(SR_PI / 2.0f, 0.0f, 0.0f));
-    skybox.setScale(vec3(50.0f, 50.0f, 50.0f));
+    // skybox.setPosition(vec3(0.0f, 0.0f, 0.0f));
+    // skybox.setRotation(vec3(SR_PI / 2.0f, 0.0f, 0.0f));
+    // skybox.setScale(vec3(50.0f, 50.0f, 50.0f));
 
     mesh edificio = load_ply("res/edificio.ply");
     edificio.setRotation(vec3(SR_PI / 2.0f, 0.0f, 0.0f));
@@ -173,7 +200,7 @@ int main(int argc, char *argv[])
 
         // Set
         cam.setPosition(player.position);
-        skybox.setPosition(player.position);
+        // skybox.setPosition(player.position);
         cam.setRotation(vec3(0.0f, player.verticalRotation, 0.0f));
 
         // UPDATE ROUTINE
@@ -185,10 +212,10 @@ int main(int argc, char *argv[])
         // cam.setFov(60.0f + 30.0f * sin(SDL_GetTicks() / 1000.0f));
         // render_mesh(fb, floor_mesh, cam, 0xFF00BBFF);
         // render_textured_mesh(fb, skybox, cam, skybox_texture);
-        //render_textured_mesh(fb, skybox, cam, skybox_texture, false);
-        render_flat_mesh(fb, edificio, cam, 0xFFFFFF00);
-        //render_wireframe(fb, edificio, cam, 0xFFFFFF00);
-        // render_wireframe(fb, floor_mesh, cam, 0xFF00FFFF);
+        // render_mesh(fb, cam, skybox);
+        render_mesh(fb, cam, edificio, myPXshader);
+        // render_wireframe(fb, edificio, cam, 0xFFFFFF00);
+        //  render_wireframe(fb, floor_mesh, cam, 0xFF00FFFF);
 
         // tHIS SHOULD BE HANDLE ALSO BY THE ENGINE
         //  Here would go rendering code to draw into fb.colorBuffer and fb.depthBuffer

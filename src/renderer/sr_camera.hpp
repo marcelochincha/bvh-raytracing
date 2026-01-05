@@ -13,14 +13,23 @@ struct camera
     float _farPlane;
     mutable mat4 _viewMatrix;
     mutable mat4 _projectionMatrix;
+    mutable mat4 _rotationMatrix;
     mutable bool _viewDirty = true;
     mutable bool _projectionDirty = true;
+    mutable bool _rotationMatrixDirty = true;
+
+    void recalculateRotationMatrix() const
+    {
+        //printf("RECALCULATED!!\n");
+        _rotationMatrix = rotationMatrix(_rotation.x, _rotation.y, _rotation.z);
+        _rotationMatrixDirty = false;
+    }
 
     void recalculateViewMatrix() const
     {
-        mat4 cam_rm = rotationMatrix(_rotation.x,_rotation.y, _rotation.z);
+        //_rotationMatrix = rotationMatrix(_rotation.x,_rotation.y, _rotation.z);
         mat4 cam_tm = translationMatrix(vec3(-_position.x, -_position.y, -_position.z));
-        _viewMatrix = cam_rm * cam_tm;
+        _viewMatrix = (this->rotation()) * cam_tm;
         _viewDirty = false;
     }
 
@@ -37,8 +46,8 @@ struct camera
             0.0f, 0.0f, d, 0.0f);
         _projectionDirty = false;
     }
-    camera() 
-        : _position(0.0f, 0.0f, 0.0f), _rotation(0.0f, 0.0f, 0.0f), _fov(90.0f), _aspectRatio(4.0f/3.0f), _nearPlane(0.1f), _farPlane(100.0f)
+    camera()
+        : _position(0.0f, 0.0f, 0.0f), _rotation(0.0f, 0.0f, 0.0f), _fov(90.0f), _aspectRatio(4.0f / 3.0f), _nearPlane(0.1f), _farPlane(100.0f)
     {
         recalculateViewMatrix();
         recalculateProjectionMatrix();
@@ -65,6 +74,20 @@ struct camera
         return _projectionMatrix;
     }
 
+    const mat4 &rotation() const
+    {
+        if (_rotationMatrixDirty)
+            recalculateRotationMatrix();
+        return _rotationMatrix;
+    }
+
+    const vec3 lookVector() const
+    {
+        mat4 cam_rt = this->rotation();
+        vec4 lv = cam_rt * vec3(0, 0, -1);
+        return vec3(lv.x, lv.y, lv.z);
+    }
+
     // setters controlados que marcan dirty
     void setPosition(const vec3 &p)
     {
@@ -75,6 +98,7 @@ struct camera
     {
         _rotation = r;
         _viewDirty = true;
+        _rotationMatrixDirty = true;
     }
     void setFov(float f)
     {

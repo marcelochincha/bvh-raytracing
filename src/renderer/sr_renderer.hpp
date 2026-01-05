@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <vector>
+#include <cmath>
 #include <algorithm>
 #include <renderer/sr_camera.hpp>
 #include <renderer/sr_primitives.hpp>
@@ -39,16 +40,22 @@ struct framebuffer
     }
 };
 
-struct render_coord
+struct rasterCoord
 {
     vec3 p; // screen position
     vec3 t; // texture coord
 };
 
-struct ClipVertex
+struct clipVertex
 {
     vec4 pos; // clip-space position
     vec2 uv;  // raw uv (no division by w). Perspective correction is applied later.
+};
+
+struct pixelCoord
+{
+    vec2 p;
+    vec2 t;
 };
 
 inline void sort_vertices_by_y(vec3 &v0, vec3 &v1, vec3 &v2)
@@ -61,7 +68,7 @@ inline void sort_vertices_by_y(vec3 &v0, vec3 &v1, vec3 &v2)
         std::swap(v1, v2);
 }
 
-inline void sort_render_coord_by_y(render_coord &v0, render_coord &v1, render_coord &v2)
+inline void sort_raster_coord_by_y(rasterCoord &v0, rasterCoord &v1, rasterCoord &v2)
 {
     if (v1.p.y < v0.p.y)
         std::swap(v0, v1);
@@ -120,6 +127,8 @@ vec3 get_barycentric_coords(float x, float y, const vec3 &v0, const vec3 &v1, co
     r.z = 1.0 - r.x - r.y;
     return r;
 }
+
+/*
 
 // Simple triangle rasterization function
 void render_flat_triangle(framebuffer &fb, vec3 v0, vec3 v1, vec3 v2, uint32_t color)
@@ -301,22 +310,23 @@ void render_texturized_triangle(framebuffer &fb, render_coord cv0, render_coord 
             }
         }
     }
-}
+}*/
 
-inline ClipVertex lerp_clip(const ClipVertex &a, const ClipVertex &b, float t)
+// Clipping algorithms
+inline clipVertex lerp_clip(const clipVertex &a, const clipVertex &b, float t)
 {
-    ClipVertex r;
+    clipVertex r;
     r.pos = a.pos + (b.pos - a.pos) * t;
     r.uv = a.uv + (b.uv - a.uv) * t;
     return r;
 }
 
-std::vector<ClipVertex> clip_against_plane(const std::vector<ClipVertex> &poly, float (*inside_fn)(const ClipVertex &))
+std::vector<clipVertex> clip_against_plane(const std::vector<clipVertex> &poly, float (*inside_fn)(const clipVertex &))
 {
-    std::vector<ClipVertex> out;
+    std::vector<clipVertex> out;
     if (poly.empty())
         return out;
-    ClipVertex S = poly.back();
+    clipVertex S = poly.back();
     float dS = inside_fn(S);
     for (const auto &E : poly)
     {
@@ -352,7 +362,205 @@ std::vector<ClipVertex> clip_against_plane(const std::vector<ClipVertex> &poly, 
     return out;
 }
 
+// Main shader sample definition
+typedef uint32_t (*pixelShaderFunc)(pixelCoord, void *);
+struct pixelShader
+{
+    pixelShaderFunc func;
+    void *data;
+};
 
+void render_triangle(framebuffer &fb, rasterCoord cv0, rasterCoord cv1, rasterCoord cv2, const pixelShader &pixel_shader)
+{
+    sort_raster_coord_by_y(cv0, cv1, cv2);
+    int y_start = std::ceil(cv0.p.y);
+    int y_end = std::floor(cv2.p.y);
+
+    // GET THE DIFERENCE OF MIN AND MAX Y
+    vec3 &v0 = cv0.p;
+    vec3 &v1 = cv1.p;
+    vec3 &v2 = cv2.p;
+
+    vec3 &v0_uv = cv0.t;
+    vec3 &v1_uv = cv1.t;
+    vec3 &v2_uv = cv2.t;
+
+    float x1, x2;
+    float z1, z2;
+    for (int y = y_start; y <= y_end; ++y)
+    {
+        x1 = interpolate_by_y(v0, v2, y, DIM_X);
+        z1 = interpolate_by_y(v0, v2, y, DIM_Z);
+        if (y < v1.y)
+        {
+            x2 = interpolate_by_y(v0, v1, y, DIM_X);
+            z2 = interpolate_by_y(v0, v1, y, DIM_Z);
+        }
+        else
+        {
+            x2 = interpolate_by_y(v1, v2, y, DIM_X);
+            z2 = interpolate_by_y(v1, v2, y, DIM_Z);
+        }
+
+        if (x1 > x2)
+        {
+            std::swap(x1, x2);
+            std::swap(z1, z2);
+        }
+
+        int x_start = std::ceil(x1);
+        int x_end = std::floor(x2);
+
+        for (int x = x_start; x <= x_end; ++x)
+        {
+            // Perform depth test
+            float z_denom = (x2 - x1);
+            if (std::abs(z_denom) < 1e-6f)
+            {
+                continue; // avoid divide by zero for narrow spans
+            }
+            float z = z1 + (z2 - z1) * ((x - x1) / z_denom);
+            if (x >= 0 && x < fb.width && y >= 0 && y < fb.height && z < fb.depthBuffer[y * fb.width + x])
+            {
+                // printf("DRAWING \n");
+                //  Execute barycentric interpolations
+                vec3 bar = get_barycentric_coords(x, y, v0, v1, v2);
+                float uz = bar.x * v0_uv.x + bar.y * v1_uv.x + bar.z * v2_uv.x;
+                float vz = bar.x * v0_uv.y + bar.y * v1_uv.y + bar.z * v2_uv.y;
+                float z_inv = bar.x * v0_uv.z + bar.y * v1_uv.z + bar.z * v2_uv.z;
+
+                float s = uz / z_inv;
+                float t = vz / z_inv;
+
+                pixelCoord pixelInput{vec2{x, y}, vec2{s, t}};
+
+                fb.colorBuffer[y * fb.width + x] = pixel_shader.func(pixelInput, pixel_shader.data);
+                fb.depthBuffer[y * fb.width + x] = z;
+            }
+
+            /*
+            // Perform depth test
+            float denom = (x2 - x1);
+            if (std::abs(denom) < 1e-6f)
+            {
+                continue; // avoid divide by zero for narrow spans
+            }
+            float z = z1 + (z2 - z1) * ((x - x1) / denom);
+            if (z < fb.depthBuffer[y * fb.width + x])
+            {
+                uint32_t color = 0xFFFFFFFF; // White for now
+                vec3 bar = get_barycentric_coords(x, y, v0, v1, v2);
+                float uz = bar.x * v0_uv.x + bar.y * v1_uv.x + bar.z * v2_uv.x;
+                float vz = bar.x * v0_uv.y + bar.y * v1_uv.y + bar.z * v2_uv.y;
+                float z_inv = bar.x * v0_uv.z + bar.y * v1_uv.z + bar.z * v2_uv.z;
+
+                float s = uz / z_inv;
+                float t = vz / z_inv;
+
+                // Check if uvs can be outside 0-1 range
+                if (s < 0.0f || s > 1.0f || t < 0.0f || t > 1.0f)
+                    continue;
+
+                int t_x = int(s * (tex.width));
+                int t_y = int(t * (tex.height));
+
+                // printf("Tex coords: %f, %f -> %d, %d\n", s, t, t_x, t_y);
+
+                int target = t_y * tex.width + t_x;
+                if (target < 0 || target >= tex.width * tex.height)
+                    continue;
+                color = tex.data[target];
+                // Brightness adjustment
+                fb.colorBuffer[y * fb.width + x] = color; // Simple brightness based on depth
+                if (use_depth)
+                    fb.depthBuffer[y * fb.width + x] = z;
+            }*/
+        }
+    }
+}
+
+// Main render function
+void render_mesh(framebuffer &fb, const camera &cam, const mesh &m, pixelShader &pixel_shader)
+{
+    // Matrix for MODEL -> VIEW -> PROJECTION
+    mat4 mv = cam.view() *  m.modelMatrix();
+    mat4 mvp = cam.projection() * cam.view() * m.modelMatrix();
+    float *brightness;
+    brightness = new float;
+    for (int index = 0; index < m.faces.size(); ++index)
+    {
+        const triangle &tri = m.faces[index];
+
+        // Get the normal first
+        //vec3 vA = (mv)*m.vertices[tri.v1].p - (mv)*m.vertices[tri.v0].p;
+        //vec3 vB = (mv)*m.vertices[tri.v2].p - (mv)*m.vertices[tri.v0].p;
+//
+        //vec3 vNormal = normalize(cross(vA, vB));
+        //vec3 vCam = cam.lookVector();
+
+        // Compute dot product
+        //float d = dot(vec3(0, 0, 1), vNormal);
+        //if (d < 0)
+        //    continue; // Backface culling
+        *brightness = 0.5; //0.5 + fmin(d, 1.0) * 0.4;
+        pixel_shader.data = (void *)brightness;
+
+        clipVertex v0{mvp * m.vertices[tri.v0].p, vec2(m.vertices[tri.v0].t.x, m.vertices[tri.v0].t.y)};
+        clipVertex v1{mvp * m.vertices[tri.v1].p, vec2(m.vertices[tri.v1].t.x, m.vertices[tri.v1].t.y)};
+        clipVertex v2{mvp * m.vertices[tri.v2].p, vec2(m.vertices[tri.v2].t.x, m.vertices[tri.v2].t.y)};
+
+        std::vector<clipVertex> poly = {v0, v1, v2};
+        poly = clip_against_plane(poly, [](const clipVertex &v)
+                                  { return v.pos.x - v.pos.w; }); // x <=  w
+        poly = clip_against_plane(poly, [](const clipVertex &v)
+                                  { return -v.pos.x - v.pos.w; }); // x >= -w
+        poly = clip_against_plane(poly, [](const clipVertex &v)
+                                  { return v.pos.y - v.pos.w; }); // y <=  w
+        poly = clip_against_plane(poly, [](const clipVertex &v)
+                                  { return -v.pos.y - v.pos.w; }); // y >= -w
+        poly = clip_against_plane(poly, [](const clipVertex &v)
+                                  { return v.pos.z - v.pos.w; }); // z <=  w
+        poly = clip_against_plane(poly, [](const clipVertex &v)
+                                  { return -v.pos.z - v.pos.w; }); // z >= -w (near)
+
+        if (poly.size() < 3)
+            continue;
+
+        clipVertex base = poly[0];
+        for (size_t i = 1; i + 1 < poly.size(); ++i)
+        {
+            clipVertex a = poly[i];
+            clipVertex b = poly[i + 1];
+
+            // Execute vertex shader? this is highly optimized so it doesnt change much to make manipulation to the shader is it neec to use antoher tipo de trassmoramation involving
+            // the use of function pointer with matrix transofmracitons for each vertexds
+            vec4 ndc_v0 = base.pos / base.pos.w;
+            vec4 ndc_v1 = a.pos / a.pos.w;
+            vec4 ndc_v2 = b.pos / b.pos.w;
+
+            vec3 screen_v0 = convert_to_fb(fb, ndc_v0);
+            vec3 screen_v1 = convert_to_fb(fb, ndc_v1);
+            vec3 screen_v2 = convert_to_fb(fb, ndc_v2);
+
+            vec3 uvw0 = vec3(base.uv.x, base.uv.y, 1.0f) / base.pos.w;
+            vec3 uvw1 = vec3(a.uv.x, a.uv.y, 1.0f) / a.pos.w;
+            vec3 uvw2 = vec3(b.uv.x, b.uv.y, 1.0f) / b.pos.w;
+
+            rasterCoord cv0 = {screen_v0, uvw0};
+            rasterCoord cv1 = {screen_v1, uvw1};
+            rasterCoord cv2 = {screen_v2, uvw2};
+
+            render_triangle(fb, cv0, cv1, cv2, pixel_shader);
+
+            // s.func(fb,cv0,cv1,cv2,s.data);
+            ////render_texturized_triangle(fb, cv0, cv1, cv2, tex, use_depth);
+            // render_triangle_lines(fb, screen_v0, screen_v1, screen_v2, color * (color + 7 * (index++ + 1)));
+        }
+    }
+    delete brightness;
+}
+
+/*
 // Render wireframe mesh
 void render_wireframe(framebuffer &fb, const mesh &m, const camera &cam, uint32_t color)
 {
@@ -510,3 +718,4 @@ void render_textured_mesh(framebuffer &fb, const mesh &m, const camera &cam, tex
         }
     }
 }
+*/
