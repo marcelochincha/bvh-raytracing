@@ -73,6 +73,37 @@ struct mesh
     }
 };
 
+// Framebuffer structure
+struct framebuffer
+{
+    uint32_t *colorBuffer;
+    float *depthBuffer;
+    int width;
+    int height;
+
+    framebuffer(int w, int h)
+        : width(w), height(h)
+    {
+        colorBuffer = new uint32_t[width * height];
+        depthBuffer = new float[width * height];
+    }
+
+    ~framebuffer()
+    {
+        delete[] colorBuffer;
+        delete[] depthBuffer;
+    }
+
+    inline void clear(uint32_t clearColor, float clearDepth)
+    {
+        for (int i = 0; i < width * height; ++i)
+        {
+            colorBuffer[i] = clearColor;
+            depthBuffer[i] = clearDepth;
+        }
+    }
+};
+
 mesh load_ply(const std::string &filename)
 {
     mesh m;
@@ -109,6 +140,9 @@ mesh load_ply(const std::string &filename)
 
     m.vertices.reserve(num_vertices);
     m.faces.reserve(num_faces);
+
+    std::cout << "PLY has " << num_vertices << " vertices and " << num_faces << " faces.\n";
+
     if (num_colors != (size_t)-1){
         m.colors.reserve(num_colors);
         std::cout << "PLY has " << num_colors << " colors.\n";

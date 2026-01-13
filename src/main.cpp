@@ -8,6 +8,7 @@
 #include <renderer/sr_renderer.hpp>
 #include <renderer/sr_camera.hpp>
 #include <renderer/sr_texture.hpp>
+#include <renderer/sr_text.h>
 
 // #define W_WIDTH 320
 // #define W_HEIGHT 200
@@ -31,7 +32,7 @@ int main(int argc, char *argv[])
 {
 
     // std::string text_path, model_path;
-    int W_WIDTH = 640, W_HEIGHT = 240;
+    int W_WIDTH = 256, W_HEIGHT = 180;
     //
     // if (argc >= 4)
     //{
@@ -56,7 +57,7 @@ int main(int argc, char *argv[])
 
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window *window = SDL_CreateWindow(
-        "sr_lec : lucas",
+        "sr_lec",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         W_WIDTH, W_HEIGHT, SDL_WINDOW_RESIZABLE);
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -71,17 +72,19 @@ int main(int argc, char *argv[])
 
     // INIT SCENE HERE
     // I NEED A camera
-    camera cam(vec3(0.0f, 0.0f, 0.0f), vec3(0.0f, 0.0f, 0.0f), 75.0f, float(W_WIDTH) / float(W_HEIGHT), 0.01f, 10000.0f);
+    camera cam(vec3(0.0f, 0.0f, 0.0f), vec3(0.0f, 0.0f, 0.0f), 75.0f, float(W_WIDTH) / float(W_HEIGHT), 0.01f, 100.0f);
 
     pixelShaderFunc funcT = [](pixelCoord c0, void *data)
     {
-        float brightness = *((float *)data);
-        return brightness_color(0xFFFF0F0F, value_ramp_n(brightness, 6));
+        uint8_t* p = (uint8_t*)data;
+        uint32_t color = *(uint32_t*)(p + 0);
+        float brightness = *(float*)(p + 4);
+        return brightness_color(color, brightness);
     };
 
     pixelShader myPXshader{
         .func = funcT,
-        .data = nullptr};
+        .data = new uint8_t[8]};
 
     // mesh skybox = load_ply(model_path);
     // texture skybox_texture;
@@ -110,7 +113,7 @@ int main(int argc, char *argv[])
     // skybox.setRotation(vec3(SR_PI / 2.0f, 0.0f, 0.0f));
     // skybox.setScale(vec3(50.0f, 50.0f, 50.0f));
 
-    mesh edificio = load_ply("res/edificio.ply");
+    mesh edificio = load_ply("res/skybox.ply");
     edificio.setRotation(vec3(SR_PI / 2.0f, 0.0f, 0.0f));
     fb.clear(0xFF000000, 1.0f);
 
@@ -127,8 +130,13 @@ int main(int argc, char *argv[])
     player.position = vec3(0.0f, 0.0f, 0.0f);
     player.verticalRotation = 0.0f;
 
+    uint64_t lastTime, currentTime = SDL_GetTicks64();
+    float deltaTime = 0.0f;
+    float FPS = 0.0f;
     while (running)
     {
+        lastTime = currentTime;
+        // FRAME START
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
@@ -142,33 +150,33 @@ int main(int argc, char *argv[])
 
         // Player input
         const Uint8 *state = SDL_GetKeyboardState(NULL);
-        float moveSpeed = 4.0f;
-        float turnSpeed = to_radians(90.0f); // 90 degrees per second
+        float moveSpeed = -4.0f;
+        float turnSpeed = -to_radians(90.0f); // 90 degrees per second
 
         vec3 moveDirection(0.0f, 0.0f, 0.0f);
         if (state[SDL_SCANCODE_W])
         {
-            moveDirection.z -= moveSpeed;
+            moveDirection.z += moveSpeed;
         }
         if (state[SDL_SCANCODE_S])
         {
-            moveDirection.z += moveSpeed;
+            moveDirection.z -= moveSpeed;
         }
         if (state[SDL_SCANCODE_A])
         {
-            moveDirection.x -= moveSpeed;
+            moveDirection.x += moveSpeed;
         }
         if (state[SDL_SCANCODE_D])
         {
-            moveDirection.x += moveSpeed;
+            moveDirection.x -= moveSpeed;
         }
         if (state[SDL_SCANCODE_Q])
         {
-            moveDirection.y -= moveSpeed;
+            moveDirection.y += moveSpeed;
         }
         if (state[SDL_SCANCODE_E])
         {
-            moveDirection.y += moveSpeed;
+            moveDirection.y -= moveSpeed;
         }
 
         if (state[SDL_SCANCODE_R])
@@ -187,20 +195,18 @@ int main(int argc, char *argv[])
             player.verticalRotation -= turnSpeed * (1 / 60.f);
         }
 
+        player.verticalRotation = fmodf(player.verticalRotation, SR_PI * 2.0f);
+
         // Rotate movement direction based on camera rotation
         float cosY = cosf(player.verticalRotation);
         float sinY = sinf(player.verticalRotation);
 
         // std::cout << "player angle: " << to_degrees(player.verticalRotation) << " deg.\n";
-        vec3 rotatedMove(
-            moveDirection.z * sinY + moveDirection.x * cosY,
-            moveDirection.y,
-            moveDirection.z * cosY + moveDirection.x * -sinY);
-        player.position = player.position + rotatedMove * (1 / 30.f);
+        mat4 camWorldMat = cam.worldMatrix();
+        vec3 rotatedMove = camWorldMat * vec4(moveDirection.x, moveDirection.y, moveDirection.z,0.0f);
+        player.position = player.position + rotatedMove * (1 / 60.f);
 
-        // Set
         cam.setPosition(player.position);
-        // skybox.setPosition(player.position);
         cam.setRotation(vec3(0.0f, player.verticalRotation, 0.0f));
 
         // UPDATE ROUTINE
@@ -213,18 +219,40 @@ int main(int argc, char *argv[])
         // render_mesh(fb, floor_mesh, cam, 0xFF00BBFF);
         // render_textured_mesh(fb, skybox, cam, skybox_texture);
         // render_mesh(fb, cam, skybox);
+        //printf("Player pos: (%f, %f, %f)\n", player.position.x, player.position.y, player.position.z);
         render_mesh(fb, cam, edificio, myPXshader);
+        //printf("Camera pos: (%f, %f, %f)\n", cam._position.x, cam._position.y, cam._position.z);
+        render_gizmo(fb,cam,vec3(0,0,0),2.0f);
+        //printf("----\n");
         // render_wireframe(fb, edificio, cam, 0xFFFFFF00);
         //  render_wireframe(fb, floor_mesh, cam, 0xFF00FFFF);
 
         // tHIS SHOULD BE HANDLE ALSO BY THE ENGINE
         //  Here would go rendering code to draw into fb.colorBuffer and fb.depthBuffer
+
+        //Print to screen
+        //FPS
+
+
+        char HUD[64];
+        snprintf(HUD, sizeof(HUD), "FPS: %.4f \nPOS: %.4f %.4f %.4f \nROT: %.4f %.4f %.4f", 1.0f / deltaTime, player.position.x, player.position.y, player.position.z, 0.0f, to_degrees(player.verticalRotation), 0.0f);
+        draw_text(fb, 5,5, HUD, 0xFFFFFF00);
+
         SDL_UpdateTexture(sdl_fb_texture, NULL, fb.colorBuffer, W_WIDTH * sizeof(uint32_t));
         // Render to screen
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, sdl_fb_texture, NULL, NULL);
         SDL_RenderPresent(renderer);
-        // SDL_Delay(16); // Roughly ~60 FPS
+
+        currentTime = SDL_GetTicks64();
+        //compare delta time
+        //FRAME END
+        deltaTime = (currentTime - lastTime) / 1000.0f; //O(1)
+        //if (currentTime % 100 < 50)
+        //{
+        //    printf("Delta Time: %.6f seconds\n", deltaTime);
+        //    FPS = 1.0f / deltaTime;
+        //}
     }
 
     // CLEAR EVERYTHING

@@ -14,6 +14,7 @@ enum vec_component
 
 
 union vec4;
+union vec3;
 
 union vec2
 {
@@ -25,6 +26,7 @@ union vec2
 
     vec2() : x(0), y(0) {}
     vec2(float x, float y) : x(x), y(y) {}
+    vec2(const vec3& v);
 };
 
 union vec3
@@ -67,9 +69,12 @@ inline vec2 normalize(vec2 a)
     return l ? a / l : a;
 }
 
+inline vec2::vec2(const vec3 &v) : x(v.x), y(v.y) {}
+
 // ---------- vec3 ----------
 inline vec3 operator+(vec3 a, vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
 inline vec3 operator-(vec3 a, vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+inline vec3 operator-(vec3 a) { return {-a.x, -a.y, -a.z}; }
 inline vec3 operator*(vec3 a, float s) { return {a.x * s, a.y * s, a.z * s}; }
 inline vec3 operator/(vec3 a, float s) { return {a.x / s, a.y / s, a.z / s}; }
 

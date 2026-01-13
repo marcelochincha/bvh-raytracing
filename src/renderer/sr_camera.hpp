@@ -20,7 +20,7 @@ struct camera
 
     void recalculateRotationMatrix() const
     {
-        //printf("RECALCULATED!!\n");
+        // printf("RECALCULATED!!\n");
         _rotationMatrix = rotationMatrix(_rotation.x, _rotation.y, _rotation.z);
         _rotationMatrixDirty = false;
     }
@@ -28,8 +28,8 @@ struct camera
     void recalculateViewMatrix() const
     {
         //_rotationMatrix = rotationMatrix(_rotation.x,_rotation.y, _rotation.z);
-        mat4 cam_tm = translationMatrix(vec3(-_position.x, -_position.y, -_position.z));
-        _viewMatrix = (this->rotation()) * cam_tm;
+        mat4 cam_translataion = translationMatrix(-_position);
+        _viewMatrix = transpose(this->rotation()) * cam_translataion;
         _viewDirty = false;
     }
 
@@ -86,6 +86,13 @@ struct camera
         mat4 cam_rt = this->rotation();
         vec4 lv = cam_rt * vec3(0, 0, -1);
         return vec3(lv.x, lv.y, lv.z);
+    }
+
+    const mat4 worldMatrix() const
+    {
+        mat4 t = translationMatrix(_position);
+        mat4 r = this->rotation();
+        return t * r;
     }
 
     // setters controlados que marcan dirty

@@ -91,6 +91,7 @@ inline mat4 operator*(const mat4 &a, const mat4 &b)
     return result;
 }   
 
+// Assumes vec3.w = 1.0f
 inline vec4 operator*(const mat4 &m, const vec3 &v)
 {
     return vec4(
@@ -148,3 +149,13 @@ inline mat4 rotationMatrix(float pitch, float yaw, float roll) // Euler angles i
     mat4 rz = rotationMatrix(roll, vec3(0, 0, 1));
     return rz * ry * rx; // ZYX order
 } 
+
+inline mat4 transpose(const mat4 &m)
+{
+    mat4 r;
+    r(0,0) = m(0,0); r(0,1) = m(1,0); r(0,2) = m(2,0); r(0,3) = m(3,0);
+    r(1,0) = m(0,1); r(1,1) = m(1,1); r(1,2) = m(2,1); r(1,3) = m(3,1);
+    r(2,0) = m(0,2); r(2,1) = m(1,2); r(2,2) = m(2,2); r(2,3) = m(3,2);
+    r(3,0) = m(0,3); r(3,1) = m(1,3); r(3,2) = m(2,3); r(3,3) = m(3,3);
+    return r;
+}

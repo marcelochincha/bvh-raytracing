@@ -19,11 +19,6 @@ struct texture
     {
     }
 
-    void reserve()
-    {
-        data = new uint32_t[width * height];
-    }
-
     ~texture()
     {
         delete[] data;
