@@ -62,10 +62,10 @@ inline vec2 operator/(vec2 a, float s) { return {a.x / s, a.y / s}; }
 
 inline float dot(vec2 a, vec2 b) { return a.x * b.x + a.y * b.y; }
 inline float cross(vec2 a, vec2 b) { return a.x * b.y - a.y * b.x; }
-inline float length(vec2 a) { return std::sqrt(dot(a, a)); }
+inline float magnitude(vec2 a) { return std::sqrt(dot(a, a)); }
 inline vec2 normalize(vec2 a)
 {
-    float l = length(a);
+    float l = magnitude(a);
     return l ? a / l : a;
 }
 
@@ -86,12 +86,14 @@ inline vec3 cross(vec3 a, vec3 b)
         a.z * b.x - a.x * b.z,
         a.x * b.y - a.y * b.x};
 }
-inline float length(vec3 a) { return sqrtf(dot(a, a)); }
+inline float magnitude(vec3 a) { return sqrtf(dot(a, a)); }
 inline vec3 normalize(vec3 a)
 {
-    float l = length(a);
+    float l = magnitude(a);
     return l ? a / l : a;
 }
+inline vec3 minimum(vec3 a, vec3 b) { return {std::fmin(a.x, b.x), std::fmin(a.y, b.y), std::fmin(a.z, b.z)}; }
+inline vec3 maximum(vec3 a, vec3 b) { return {std::fmax(a.x, b.x), std::fmax(a.y, b.y), std::fmax(a.z, b.z)}; }
 
 inline vec3::vec3(const vec4 &v) : x(v.x), y(v.y), z(v.z) {}
 
@@ -103,10 +105,10 @@ inline vec4 operator*(vec4 a, float s) { return {a.x * s, a.y * s, a.z * s, a.w 
 inline vec4 operator/(vec4 a, float s) { return {a.x / s, a.y / s, a.z / s, a.w / s}; }
 
 inline float dot(vec4 a, vec4 b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
-inline float length(vec4 a) { return sqrtf(dot(a, a)); }
+inline float magnitude(vec4 a) { return sqrtf(dot(a, a)); }
 inline vec4 normalize(vec4 a)
 {
-    float l = length(a);
+    float l = magnitude(a);
     return l ? a / l : a;
 }
 

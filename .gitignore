@@ -29,7 +29,6 @@ dist/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-Makefile
 
 # Dependencies
 bin/
@@ -60,3 +59,4 @@ __pycache__/
 third_party/
 
 r_refactor/
+Others/

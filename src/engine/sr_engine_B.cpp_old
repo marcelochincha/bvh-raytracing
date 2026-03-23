@@ -1,0 +1,996 @@
+#include <engine/sr_engine.hpp>
+#ifdef TYPE_B 
+
+#include <unordered_map>
+#include <renderer/sr_renderer.hpp>
+#include <algorithm>
+#include <string>
+#include <cmath>
+#include <vector>
+
+const float kMouseSensitivity = 0.0025f;
+const float moveSpeed = 6.0f;
+
+// BALL PHYSICS - Ping Pong Ball Simulation
+
+// Physical constants - Ajustados para estabilidad numérica
+const float GRAVITY = 9.81f;                    // m/s^2
+const float AIR_DRAG = 0.02f;                   // Coeficiente de arrastre del aire (simplificado)
+const float MAGNUS_STRENGTH = 0.15f;            // Fuerza del efecto Magnus (simplificado)
+const float ANGULAR_DRAG = 0.98f;               // Fricción angular por frame
+const float MAX_VELOCITY = 50.0f;               // Velocidad máxima permitida (m/s)
+const float MAX_ANGULAR_VEL = 100.0f;           // Velocidad angular máxima (rad/s)
+const float MAX_TIME_STEP = 0.005f;             // Paso de tiempo máximo para sub-stepping (5ms)
+const int MAX_SUBSTEPS = 10;                    // Máximo número de sub-pasos por frame
+
+struct ball {
+    vec3 pos;           // Posición actual (m)
+    vec3 vel;           // Velocidad lineal (m/s)
+    vec3 angular_vel;   // Velocidad angular (rad/s) 
+    mesh* mesh;         // Puntero al mesh para renderizar
+    float radius;       // Radio de la pelota (m)
+    float bounce;       // Coeficiente de restitución (0.0 a 1.0)
+    float friction;     // Coeficiente de fricción con superficies
+};
+
+// Game State Machine for Ping Pong
+enum class GameState {
+    SERVING,      // Esperando saque
+    PLAYING,      // Pelota en juego
+    POINT_SCORED, // Punto anotado (pausa breve)
+    GAME_OVER     // Alguien llegó a 11 puntos
+};
+
+struct GameLogic {
+    GameState state;
+    int player_score;        // Puntos del jugador (Z+)
+    int opponent_score;      // Puntos del oponente (Z-)
+    float state_timer;       // Timer para transiciones de estado
+    bool player_serve;       // true = jugador saca, false = oponente saca
+    int last_paddle_hit;     // 0=ninguno, 1=jugador, 2=oponente
+    bool touched_table;      // La pelota tocó la mesa este rally
+};
+
+// Main game engine structure
+struct Engine
+{
+    framebuffer fb;
+    camera cam;
+    texture skybox_tex;
+    std::array<texture, 6> skybox_faces;
+
+    ball* ball_entity;
+    GameLogic game;
+    mesh* player_paddle;     
+    mesh* opponent_paddle;  
+    mesh* ball_outline;
+
+    float yaw = 0, pitch = 0;
+    vec3 position = vec3(0.0f, 1.5f, 5.0f);
+    vec3 target = vec3(0.0f, 1.0f, 0.0f);
+
+    std::unordered_map<std::string,mesh*> meshes;
+
+    // Must declare constructor to initialize framebuffer
+    Engine(int width, int height) : fb(width, height) {}
+};
+
+void init_ball(ball* b) {
+    b->pos = (vec3){0.0f, 3.0f, 0.5f};      // Empieza a 5 metros de altura
+    b->vel = (vec3){0.0f, 0.0f, 0.0f};      // Lanzamiento diagonal
+    b->angular_vel = (vec3){0.0f, 0.0f, 0.0f};  // Top-spin moderado
+    b->radius = 0.02f;                        // Escalado para visualización
+    b->bounce = 0.85f;                       // Rebota al 85% de la energía
+    b->friction = 0.4f;                      // Fricción con la mesa
+    //b->mesh = nullptr;                       // Asignar el mesh después de crear la bola
+}
+
+// Calcula el efecto Magnus: fuerza de sustentación debido al spin
+void apply_magnus_effect(ball* b, float dt) {
+    // Velocidad de la pelota
+    float speed = sqrtf(b->vel.x * b->vel.x + b->vel.y * b->vel.y + b->vel.z * b->vel.z);
+    
+    // Solo aplicar Magnus si hay movimiento significativo
+    if (speed < 0.1f) return;
+    
+    // Velocidad angular
+    float omega = sqrtf(b->angular_vel.x * b->angular_vel.x + 
+                       b->angular_vel.y * b->angular_vel.y + 
+                       b->angular_vel.z * b->angular_vel.z);
+    
+    // Solo aplicar si hay rotación significativa
+    if (omega < 0.1f) return;
+    
+    // Fuerza de Magnus: ω × v (producto cruz)
+    // Da la dirección perpendicular al movimiento y la rotación
+    vec3 magnus_accel;
+    magnus_accel.x = b->angular_vel.y * b->vel.z - b->angular_vel.z * b->vel.y;
+    magnus_accel.y = b->angular_vel.z * b->vel.x - b->angular_vel.x * b->vel.z;
+    magnus_accel.z = b->angular_vel.x * b->vel.y - b->angular_vel.y * b->vel.x;
+    
+    // Escalar por el coeficiente de Magnus (sin división por masa)
+    float magnus_scale = MAGNUS_STRENGTH * dt;
+    
+    // Aplicar aceleración directamente
+    b->vel.x += magnus_accel.x * magnus_scale;
+    b->vel.y += magnus_accel.y * magnus_scale;
+    b->vel.z += magnus_accel.z * magnus_scale;
+}
+
+// Aplica fricción del aire a la velocidad lineal y angular
+void apply_air_resistance(ball* b, float dt) {
+    // Fricción lineal simplificada: reducir velocidad proporcionalmente
+    float speed = sqrtf(b->vel.x * b->vel.x + b->vel.y * b->vel.y + b->vel.z * b->vel.z);
+    
+    if (speed > 0.01f) {
+        // Aplicar fricción como porcentaje de la velocidad
+        float drag_factor = 1.0f - (AIR_DRAG * dt * speed);
+        if (drag_factor < 0.9f) drag_factor = 0.9f; // Limitar pérdida por frame
+        
+        b->vel.x *= drag_factor;
+        b->vel.y *= drag_factor;
+        b->vel.z *= drag_factor;
+    }
+    
+    // Fricción angular (damping simple)
+    b->angular_vel.x *= ANGULAR_DRAG;
+    b->angular_vel.y *= ANGULAR_DRAG;
+    b->angular_vel.z *= ANGULAR_DRAG;
+    
+    // Si la velocidad angular es muy baja, la ponemos a cero
+    if (fabsf(b->angular_vel.x) < 0.01f) b->angular_vel.x = 0.0f;
+    if (fabsf(b->angular_vel.y) < 0.01f) b->angular_vel.y = 0.0f;
+    if (fabsf(b->angular_vel.z) < 0.01f) b->angular_vel.z = 0.0f;
+}
+
+// Resuelve el rebote con spin en una superficie
+void resolve_spin_bounce(ball* b, vec3 normal) {
+    // Normalizar el vector normal (con protección contra división por cero)
+    float len = sqrtf(normal.x * normal.x + normal.y * normal.y + normal.z * normal.z);
+    if (len < 0.0001f) return; // Protección contra vector cero
+    normal.x /= len; normal.y /= len; normal.z /= len;
+    
+    // Componente normal de la velocidad (perpendicular a la superficie)
+    float vel_normal = b->vel.x * normal.x + b->vel.y * normal.y + b->vel.z * normal.z;
+    
+    // Solo rebotar si nos estamos acercando a la superficie
+    if (vel_normal >= 0) return;
+    
+    // Componente tangencial de la velocidad (paralela a la superficie)
+    vec3 vel_normal_vec = {normal.x * vel_normal, normal.y * vel_normal, normal.z * vel_normal};
+    vec3 vel_tangent = {
+        b->vel.x - vel_normal_vec.x,
+        b->vel.y - vel_normal_vec.y,
+        b->vel.z - vel_normal_vec.z
+    };
+    
+    // Velocidad de la superficie de la pelota en el punto de contacto debido al spin
+    // v_surface = ω × r (en el punto de contacto, r apunta hacia arriba desde el contacto)
+    vec3 contact_velocity;
+    contact_velocity.x = (b->angular_vel.y * normal.z - b->angular_vel.z * normal.y) * b->radius;
+    contact_velocity.y = (b->angular_vel.z * normal.x - b->angular_vel.x * normal.z) * b->radius;
+    contact_velocity.z = (b->angular_vel.x * normal.y - b->angular_vel.y * normal.x) * b->radius;
+    
+    // Velocidad relativa tangencial en el punto de contacto
+    vec3 relative_vel = {
+        vel_tangent.x - contact_velocity.x,
+        vel_tangent.y - contact_velocity.y,
+        vel_tangent.z - contact_velocity.z
+    };
+    
+    // Aplicar fricción: cambio de velocidad tangencial
+    float friction_impulse = b->friction;
+    vel_tangent.x -= relative_vel.x * friction_impulse;
+    vel_tangent.y -= relative_vel.y * friction_impulse;
+    vel_tangent.z -= relative_vel.z * friction_impulse;
+    
+    // Nueva velocidad normal (invertida y con bounce)
+    vel_normal_vec.x = -vel_normal_vec.x * b->bounce;
+    vel_normal_vec.y = -vel_normal_vec.y * b->bounce;
+    vel_normal_vec.z = -vel_normal_vec.z * b->bounce;
+    
+    // Velocidad final
+    b->vel.x = vel_tangent.x + vel_normal_vec.x;
+    b->vel.y = vel_tangent.y + vel_normal_vec.y;
+    b->vel.z = vel_tangent.z + vel_normal_vec.z;
+    
+    // El cambio en velocidad tangencial afecta el spin
+    // Torque = r × F, y F es proporcional al cambio de velocidad tangencial
+    vec3 delta_vel = {
+        relative_vel.x * friction_impulse,
+        relative_vel.y * friction_impulse,
+        relative_vel.z * friction_impulse
+    };
+    
+    // Cambio en velocidad angular debido a la fricción
+    // Simplificación: el cambio de spin es perpendicular al normal y al cambio de velocidad
+    float angular_change = friction_impulse * 5.0f; // Factor de conversión
+    b->angular_vel.x += (delta_vel.y * normal.z - delta_vel.z * normal.y) * angular_change;
+    b->angular_vel.y += (delta_vel.z * normal.x - delta_vel.x * normal.z) * angular_change;
+    b->angular_vel.z += (delta_vel.x * normal.y - delta_vel.y * normal.x) * angular_change;
+}
+
+// Detecta y resuelve colisión con un plano
+bool collide_with_plane(ball* b, vec3 plane_point, vec3 plane_normal) {
+    // Normalizar el normal del plano (con protección)
+    float len = sqrtf(plane_normal.x * plane_normal.x + 
+                     plane_normal.y * plane_normal.y + 
+                     plane_normal.z * plane_normal.z);
+    if (len < 0.0001f) return false; // Protección contra vector cero
+    plane_normal.x /= len; 
+    plane_normal.y /= len; 
+    plane_normal.z /= len;
+    
+    // Vector del punto del plano al centro de la pelota
+    vec3 to_ball = {
+        b->pos.x - plane_point.x,
+        b->pos.y - plane_point.y,
+        b->pos.z - plane_point.z
+    };
+    
+    // Distancia del centro de la pelota al plano (con signo)
+    float distance = to_ball.x * plane_normal.x + 
+                    to_ball.y * plane_normal.y + 
+                    to_ball.z * plane_normal.z;
+    
+    // Si la pelota está penetrando el plano
+    if (distance < b->radius) {
+        // Corregir posición: empujar la pelota fuera del plano
+        float penetration = b->radius - distance;
+        b->pos.x += plane_normal.x * penetration;
+        b->pos.y += plane_normal.y * penetration;
+        b->pos.z += plane_normal.z * penetration;
+        
+        // Resolver el rebote con spin
+        resolve_spin_bounce(b, plane_normal);
+        
+        return true;
+    }
+    
+    return false;
+}
+
+// AABB (Axis-Aligned Bounding Box) para colisiones
+struct AABB
+{
+    vec3 min;  // Esquina mínima del AABB
+    vec3 max;  // Esquina máxima del AABB
+};
+
+// Calcula el AABB de un mesh en world space (considerando transformación y escala)
+AABB calculate_mesh_aabb(const mesh* m) {
+    AABB aabb;
+    
+    if (m->vertices.empty()) {
+        aabb.min = aabb.max = vec3(0.0f, 0.0f, 0.0f);
+        return aabb;
+    }
+    
+    // Obtener la matriz de modelo (incluye posición, rotación y escala)
+    mat4 model = m->modelMatrix();
+    
+    // Inicializar con valores extremos
+    vec3 min_bounds(1e10f, 1e10f, 1e10f);
+    vec3 max_bounds(-1e10f, -1e10f, -1e10f);
+    
+    // Transformar cada vértice al world space y encontrar min/max
+    for (const vertex& v : m->vertices) {
+        // Aplicar matriz de modelo al vértice
+        vec4 world_pos = model * vec4(v.p.x, v.p.y, v.p.z, 1.0f);
+        
+        // Actualizar bounds
+        min_bounds.x = std::min(min_bounds.x, world_pos.x);
+        min_bounds.y = std::min(min_bounds.y, world_pos.y);
+        min_bounds.z = std::min(min_bounds.z, world_pos.z);
+        
+        max_bounds.x = std::max(max_bounds.x, world_pos.x);
+        max_bounds.y = std::max(max_bounds.y, world_pos.y);
+        max_bounds.z = std::max(max_bounds.z, world_pos.z);
+    }
+    
+    aabb.min = min_bounds;
+    aabb.max = max_bounds;
+    return aabb;
+}
+
+// Encuentra el punto más cercano en un AABB a un punto dado
+vec3 closest_point_on_aabb(const AABB& aabb, const vec3& point) {
+    vec3 closest;
+    closest.x = std::max(aabb.min.x, std::min(point.x, aabb.max.x));
+    closest.y = std::max(aabb.min.y, std::min(point.y, aabb.max.y));
+    closest.z = std::max(aabb.min.z, std::min(point.z, aabb.max.z));
+    return closest;
+}
+
+// Detecta colisión entre esfera (pelota) y AABB, retorna el normal de la cara colisionada
+bool collide_sphere_aabb(ball* b, const AABB& aabb, vec3& out_normal) {
+    // Encontrar el punto más cercano en el AABB al centro de la esfera
+    vec3 closest = closest_point_on_aabb(aabb, b->pos);
+    
+    // Calcular distancia del centro de la esfera al punto más cercano
+    vec3 diff = {
+        b->pos.x - closest.x,
+        b->pos.y - closest.y,
+        b->pos.z - closest.z
+    };
+    
+    float dist_squared = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+    
+    // Si la distancia es menor que el radio, hay colisión
+    if (dist_squared < b->radius * b->radius) {
+        // Calcular penetración
+        float dist = sqrtf(dist_squared);
+        
+        // Si la pelota está dentro del AABB (dist muy pequeño), usar el eje más cercano
+        if (dist < 0.0001f) {
+            // Encontrar qué cara está más cerca
+            float dist_to_faces[6] = {
+                fabsf(b->pos.x - aabb.min.x), // Left (-X)
+                fabsf(b->pos.x - aabb.max.x), // Right (+X)
+                fabsf(b->pos.y - aabb.min.y), // Bottom (-Y)
+                fabsf(b->pos.y - aabb.max.y), // Top (+Y)
+                fabsf(b->pos.z - aabb.min.z), // Back (-Z)
+                fabsf(b->pos.z - aabb.max.z)  // Front (+Z)
+            };
+            
+            int closest_face = 0;
+            float min_dist = dist_to_faces[0];
+            for (int i = 1; i < 6; i++) {
+                if (dist_to_faces[i] < min_dist) {
+                    min_dist = dist_to_faces[i];
+                    closest_face = i;
+                }
+            }
+            
+            // Asignar normal según la cara más cercana
+            vec3 normals[6] = {
+                {-1.0f, 0.0f, 0.0f},  // Left
+                {1.0f, 0.0f, 0.0f},   // Right
+                {0.0f, -1.0f, 0.0f},  // Bottom
+                {0.0f, 1.0f, 0.0f},   // Top
+                {0.0f, 0.0f, -1.0f},  // Back
+                {0.0f, 0.0f, 1.0f}    // Front
+            };
+            
+            out_normal = normals[closest_face];
+            
+            // Empujar la pelota fuera
+            float penetration = b->radius + min_dist;
+            b->pos.x += out_normal.x * penetration;
+            b->pos.y += out_normal.y * penetration;
+            b->pos.z += out_normal.z * penetration;
+        }
+        else {
+            // Normalizar el vector de diferencia para obtener el normal
+            out_normal.x = diff.x / dist;
+            out_normal.y = diff.y / dist;
+            out_normal.z = diff.z / dist;
+            
+            // Corregir posición: empujar la pelota fuera del AABB
+            float penetration = b->radius - dist;
+            b->pos.x += out_normal.x * penetration;
+            b->pos.y += out_normal.y * penetration;
+            b->pos.z += out_normal.z * penetration;
+        }
+        
+        return true;
+    }
+    
+    return false;
+}
+
+// Realiza un solo paso de física (usado internamente por sub-stepping)
+void physics_substep(ball* b, const std::unordered_map<std::string, mesh*>& meshes, float dt) {
+    // 1. Aplicar Gravedad
+    b->vel.y -= GRAVITY * dt;
+
+    // 2. Aplicar resistencia del aire (lineal y angular)
+    apply_air_resistance(b, dt);
+
+    // 3. Aplicar Efecto Magnus (antes de mover)
+    apply_magnus_effect(b, dt);
+
+    // 4. Limitar velocidades para evitar explosión numérica
+    float speed = sqrtf(b->vel.x * b->vel.x + b->vel.y * b->vel.y + b->vel.z * b->vel.z);
+    if (speed > MAX_VELOCITY) {
+        float scale = MAX_VELOCITY / speed;
+        b->vel.x *= scale;
+        b->vel.y *= scale;
+        b->vel.z *= scale;
+    }
+    
+    float omega = sqrtf(b->angular_vel.x * b->angular_vel.x + 
+                       b->angular_vel.y * b->angular_vel.y + 
+                       b->angular_vel.z * b->angular_vel.z);
+    if (omega > MAX_ANGULAR_VEL) {
+        float scale = MAX_ANGULAR_VEL / omega;
+        b->angular_vel.x *= scale;
+        b->angular_vel.y *= scale;
+        b->angular_vel.z *= scale;
+    }
+    
+    // 5. Integración: Mover la pelota
+    b->pos.x += b->vel.x * dt;
+    b->pos.y += b->vel.y * dt;
+    b->pos.z += b->vel.z * dt;
+
+    // 6. Colisiones con meshes usando AABB
+    for (const auto& [name, mesh_ptr] : meshes) {
+        // Calcular AABB del mesh en world space (con transformación y escala)
+        AABB mesh_aabb = calculate_mesh_aabb(mesh_ptr);
+        
+        // Detectar colisión con la pelota (esfera)
+        vec3 collision_normal;
+        if (collide_sphere_aabb(b, mesh_aabb, collision_normal)) {
+            // Resolver el rebote usando el normal de la cara colisionada
+            resolve_spin_bounce(b, collision_normal);
+        }
+    }
+}
+
+void update_physics(ball* b, const std::unordered_map<std::string, mesh*>& meshes, float dt) {
+    // Limitar dt para evitar saltos grandes
+    if (dt > 0.1f) dt = 0.1f;
+    
+    // Verificación de NaN antes de empezar
+    if (std::isnan(b->pos.x) || std::isnan(b->pos.y) || std::isnan(b->pos.z) ||
+        std::isnan(b->vel.x) || std::isnan(b->vel.y) || std::isnan(b->vel.z)) {
+        init_ball(b);
+        return;
+    }
+    
+    // Calcular el número de sub-steps necesarios basado en la velocidad
+    // Cuanto más rápida la pelota, más sub-steps necesitamos para evitar tunneling
+    float speed = sqrtf(b->vel.x * b->vel.x + b->vel.y * b->vel.y + b->vel.z * b->vel.z);
+    
+    // Calcular cuántos sub-steps necesitamos para mantener cada paso pequeño
+    int substeps = (int)(dt / MAX_TIME_STEP) + 1;
+    
+    // También añadir sub-steps basados en la velocidad
+    // Si la pelota se mueve más de su radio por frame, necesitamos más sub-steps
+    float distance_per_frame = speed * dt;
+    if (distance_per_frame > b->radius) {
+        int velocity_substeps = (int)(distance_per_frame / b->radius) + 1;
+        substeps = std::max(substeps, velocity_substeps);
+    }
+    
+    // Limitar el número de sub-steps para no sobrecargar el CPU
+    substeps = std::min(substeps, MAX_SUBSTEPS);
+    
+    // Dividir el delta time entre los sub-steps
+    float sub_dt = dt / (float)substeps;
+    
+    // Ejecutar múltiples sub-pasos de física
+    for (int i = 0; i < substeps; i++) {
+        physics_substep(b, meshes, sub_dt);
+        
+        // Verificación de NaN después de cada substep
+        if (std::isnan(b->pos.x) || std::isnan(b->pos.y) || std::isnan(b->pos.z) ||
+            std::isnan(b->vel.x) || std::isnan(b->vel.y) || std::isnan(b->vel.z)) {
+            init_ball(b);
+            return;
+        }
+    }
+
+    // Sincronizar con el visual (una sola vez después de todos los substeps)
+    if(b->mesh) {
+        b->mesh->setPosition(b->pos);
+        // La rotación visual se acumula basándose en la velocidad angular
+        // Usamos el dt original, no sub_dt
+        b->mesh->updateRotation(vec3(
+            b->angular_vel.x * dt, 
+            b->angular_vel.y * dt, 
+            b->angular_vel.z * dt
+        ));
+    }
+}
+
+// Control de paleta del jugador con mouse
+void update_player_paddle(Engine* e) {
+    // IA temporal para testing - predicción similar al oponente
+    ball* b = e->ball_entity;
+    vec3 paddle_pos = e->player_paddle->position;
+    
+    // Si la pelota se acerca al jugador (velocidad positiva en Z)
+    if (b->vel.z > 0.0f) {
+        // Calcular posición Z óptima para interceptar (entre pelota y límite de cancha)
+        float intercept_z = b->pos.z + (1.5f - b->pos.z) * 0.7f; // 70% del camino
+        intercept_z = std::clamp(intercept_z, 0.8f, 1.4f); // Rango válido
+        
+        // Predecir dónde estará la pelota cuando llegue a nuestra Z
+        float time_to_intercept = (intercept_z - b->pos.z) / b->vel.z;
+        
+        if (time_to_intercept > 0.0f && time_to_intercept < 2.0f) {
+            float predicted_x = b->pos.x + b->vel.x * time_to_intercept;
+            float predicted_y = b->pos.y + b->vel.y * time_to_intercept - 0.5f * GRAVITY * time_to_intercept * time_to_intercept;
+            
+            // Mover hacia la posición predicha
+            float target_x = predicted_x;
+            float target_y = predicted_y;
+            float target_z = intercept_z;
+            
+            // Limitar a área válida
+            target_x = std::clamp(target_x, -0.6f, 0.6f);
+            target_y = std::clamp(target_y, 0.85f, 1.4f);
+            
+            // Interpolar hacia el objetivo (velocidad de IA jugador)
+            vec3 current_pos = paddle_pos;
+            float response_speed = 0.85f; // Respuesta muy rápida (85% por frame)
+            
+            current_pos.x += (target_x - current_pos.x) * response_speed;
+            current_pos.y += (target_y - current_pos.y) * response_speed;
+            current_pos.z += (target_z - current_pos.z) * response_speed;
+            
+            e->player_paddle->setPosition(current_pos);
+        }
+    }
+    else {
+        // Volver al centro cuando no hay amenaza
+        vec3 current_pos = paddle_pos;
+        float return_speed = 0.15f; // Retorno lento al centro
+        
+        current_pos.x += (0.0f - current_pos.x) * return_speed;
+        current_pos.y += (0.95f - current_pos.y) * return_speed;
+        
+        // Retroceder a posición inicial
+        current_pos.z += (1.5f - current_pos.z) * return_speed;
+        
+        e->player_paddle->setPosition(current_pos);
+    }
+}
+
+// IA simple del oponente con predicción
+void update_opponent_ai(Engine* e, float dt) {
+    ball* b = e->ball_entity;
+    vec3 paddle_pos = e->opponent_paddle->position;
+    
+    // Si la pelota se acerca al oponente (velocidad negativa en Z)
+    if (b->vel.z < 0.0f) {
+        // Calcular posición Z óptima para interceptar (entre pelota y límite de cancha)
+        float intercept_z = b->pos.z + (-1.5f - b->pos.z) * 0.1f; // 70% del camino
+        intercept_z = std::clamp(intercept_z, -2.5f, -1.0f); // Rango válido
+        
+        // Predecir dónde estará la pelota cuando llegue a nuestra Z
+        float time_to_intercept = (intercept_z - b->pos.z) / b->vel.z;
+        
+            float predicted_x = b->pos.x + b->vel.x * time_to_intercept;
+            float predicted_y = b->pos.y + b->vel.y * time_to_intercept - 0.5f * GRAVITY * time_to_intercept * time_to_intercept;
+            
+            // Mover hacia la posición predicha
+            float target_x = predicted_x;
+            float target_y = predicted_y;
+            float target_z = intercept_z;
+            
+            // Limitar a área válida
+            target_x = std::clamp(target_x, -0.6f, 0.6f);
+            target_y = std::clamp(target_y, 0.85f, 1.4f);
+            
+            // Interpolar hacia el objetivo (velocidad de IA)
+            vec3 current_pos = paddle_pos;
+            float response_speed = 0.25f; // Respuesta muy rápida (85% por frame)
+            
+            current_pos.x += (target_x - current_pos.x) * response_speed;
+            current_pos.y += (target_y - current_pos.y) * response_speed;
+            current_pos.z += (target_z - current_pos.z) * response_speed;
+            
+            e->opponent_paddle->setPosition(current_pos);
+    }
+    else {
+        // Volver al centro cuando no hay amenaza
+        vec3 current_pos = paddle_pos;
+        float return_speed = 0.15f; // Retorno lento al centro
+        
+        current_pos.x += (0.0f - current_pos.x) * return_speed;
+        current_pos.y += (0.95f - current_pos.y) * return_speed;
+        
+        // Retroceder a posición inicial
+        current_pos.z += (-1.5f - current_pos.z) * return_speed;
+        
+        e->opponent_paddle->setPosition(current_pos);
+    }
+}
+
+// Detectar y resolver colisión con paletas
+bool check_paddle_collision(ball* b, mesh* paddle, int paddle_id, Engine* e) {
+    AABB paddle_aabb = calculate_mesh_aabb(paddle);
+    vec3 collision_normal;
+    
+    if (collide_sphere_aabb(b, paddle_aabb, collision_normal)) {
+        // Validar que el golpe sea válido (pelota sobre la mesa)
+        if (b->pos.y > 0.76f && b->pos.y < 1.5f &&
+            fabsf(b->pos.x) < 0.9f && fabsf(b->pos.z) < 1.5f) {
+            
+            e->game.last_paddle_hit = paddle_id;
+            
+            // Ambas paletas apuntan hacia el oponente para rally dinámico
+            vec3 target_pos;
+            
+            if (paddle_id == 2) {
+                // Oponente apunta hacia el jugador
+                target_pos = e->player_paddle->position;
+            } else {
+                // Jugador apunta hacia el oponente
+                target_pos = e->opponent_paddle->position;
+            }
+            
+            // Calcular dirección hacia el objetivo
+            vec3 to_target;
+            to_target.x = target_pos.x - b->pos.x;
+            to_target.y = 0.5f; // Leve arco hacia arriba
+            to_target.z = target_pos.z - b->pos.z;
+            
+            // Normalizar y aplicar velocidad
+            float len = sqrtf(to_target.x * to_target.x + to_target.y * to_target.y + to_target.z * to_target.z);
+            if (len > 0.001f) {
+                float speed = sqrtf(b->vel.x * b->vel.x + b->vel.y * b->vel.y + b->vel.z * b->vel.z);
+                speed = std::max(speed, 5.0f); // Velocidad mínima
+                
+                b->vel.x = (to_target.x / len) * speed * 0.7f;
+                b->vel.y = (to_target.y / len) * speed * 0.5f + 2.0f; // Más vertical
+                b->vel.z = (to_target.z / len) * speed;
+            }
+            
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Lógica de la máquina de estados del juego
+void update_game_logic(Engine* e, ball* b, float dt) {
+    GameLogic& game = e->game;
+    
+    switch (game.state) {
+        case GameState::SERVING:
+            game.state_timer -= dt;
+            
+            if (game.state_timer <= 0.0f) {
+                // Posicionar pelota en el centro
+                b->pos = vec3(0.0f, 1.0f, 0.0f);
+                
+                // Velocidad hacia el que recibe
+                float rand_x = ((rand() % 200) - 100) / 100.0f; // -1 a 1
+                if (game.player_serve) {
+                    b->vel = vec3(rand_x, -0.5f, -4.0f); // Hacia oponente
+                } else {
+                    b->vel = vec3(rand_x, -0.5f, 4.0f); // Hacia jugador
+                }
+                
+                b->angular_vel = vec3(5.0f, 0.0f, 0.0f);
+                game.touched_table = false;
+                game.last_paddle_hit = 0;
+                game.state = GameState::PLAYING;
+            }
+            break;
+            
+        case GameState::PLAYING: {
+            // Verificar si tocó la mesa
+            for (const auto& [name, mesh_ptr] : e->meshes) {
+                if (name == "MAIN_TABLE") {
+                    AABB table_aabb = calculate_mesh_aabb(mesh_ptr);
+                    vec3 dummy_normal;
+                    if (collide_sphere_aabb(b, table_aabb, dummy_normal)) {
+                        game.touched_table = true;
+                    }
+                }
+            }
+            
+            // Verificar condiciones de fault
+            bool fault = false;
+            bool player_scores = false;
+            
+            // Out lateral
+            if (fabsf(b->pos.x) > 0.9f) {
+                fault = true;
+                player_scores = (game.last_paddle_hit == 2); // Si oponente golpeó último
+            }
+            
+            // Out longitudinal o cayó al suelo
+            if (b->pos.y < 0.0f || fabsf(b->pos.z) > 2.0f) {
+                fault = true;
+                // Determinar quién pierde el punto
+                if (b->pos.z > 1.5f) {
+                    player_scores = false; // Pelota pasó al lado del jugador
+                } else if (b->pos.z < -1.5f) {
+                    player_scores = true; // Pelota pasó al lado del oponente
+                } else {
+                    player_scores = (game.last_paddle_hit == 1); // Jugador falló
+                }
+            }
+            
+            if (fault) {
+                if (player_scores) {
+                    game.player_score++;
+                } else {
+                    game.opponent_score++;
+                }
+                
+                game.state = GameState::POINT_SCORED;
+                game.state_timer = 1.5f;
+                game.player_serve = !game.player_serve; // Alternar saque
+            }
+            break;
+        }
+            
+        case GameState::POINT_SCORED:
+            game.state_timer -= dt;
+            
+            if (game.state_timer <= 0.0f) {
+                // Verificar si alguien ganó
+                if ((game.player_score >= 11 || game.opponent_score >= 11) &&
+                    abs(game.player_score - game.opponent_score) >= 2) {
+                    game.state = GameState::GAME_OVER;
+                } else {
+                    game.state = GameState::SERVING;
+                    game.state_timer = 2.0f;
+                }
+            }
+            break;
+            
+        case GameState::GAME_OVER:
+            // Esperar tecla R para reiniciar
+            break;
+    }
+}
+
+Engine *engine_create(int width, int height)
+{
+    return new Engine(width, height);
+}
+
+void engine_init(Engine *e)
+{
+    SDL_SetRelativeMouseMode(SDL_TRUE); 
+
+    e->cam = camera(vec3(0.0f, 4.5f, -2.0f), vec3(0.0f, 0.0f, 0.0f), 70.0f, float(e->fb.width) / float(e->fb.height), 0.01f, 1000.0f);
+
+    load_png_texture("res/textures/skybox3/null_plainsky512_rt.png", e->skybox_faces[0]);
+    load_png_texture("res/textures/skybox3/null_plainsky512_bk.png", e->skybox_faces[1]);
+    load_png_texture("res/textures/skybox3/null_plainsky512_lf.png", e->skybox_faces[3]);
+    load_png_texture("res/textures/skybox3/null_plainsky512_ft.png", e->skybox_faces[2]);
+    load_png_texture("res/textures/skybox3/null_plainsky512_dn.png", e->skybox_faces[5]);
+    load_png_texture("res/textures/skybox3/null_plainsky512_up.png", e->skybox_faces[4]);
+
+    //add a simple cube mesh to the engine's mesh map for testing
+    ball* ball_entity = new ball;
+    mesh* ball_mesh = new mesh;
+
+    init_ball(ball_entity);
+    create_sphere(ball_mesh, ball_entity->radius, 8, 12);
+
+    //Quirky ahh thing, this should be changed later, yes the ball enity should be the only one to tsotre the mesh
+    ball_entity->mesh = ball_mesh;
+    e->ball_entity = ball_entity; 
+
+    mesh* outline_mesh = new mesh;
+    create_sphere(outline_mesh, ball_entity->radius * 1.5f, 6, 10);
+    outline_mesh->inverseFaces = true; // Invertir caras para renderizar el contorno desde adentro
+    e->ball_outline = outline_mesh;
+
+
+    mesh* floor_mesh = new mesh;
+    create_plane(floor_mesh, 5.0f, 5.0f);
+    e->meshes["est"] = floor_mesh;
+
+    //Create table?
+    mesh* table_mesh = new mesh;
+    create_cube(table_mesh, 1.0f);
+    table_mesh->setPosition(vec3(0.0f, 0.76f, 0.0f));
+    table_mesh->setScale(vec3(0.76f, 0.025f, 1.37f));
+    e->meshes["MAIN_TABLE"] = table_mesh;
+
+    //Create net
+    mesh* net_mesh = new mesh;
+    create_cube(net_mesh, 1.0f);
+    net_mesh->setPosition(vec3(0.0f, 0.76 + 0.0125f + 0.038f, 0.0f));
+    net_mesh->setScale(vec3(0.912f, 0.076f, 0.02f));
+    e->meshes["NET_TABLE"] = net_mesh;
+
+    // Crear paleta del jugador (Z+ adelante)
+    mesh* player_paddle = new mesh;
+    create_cube(player_paddle, 1.0f);
+    player_paddle->setPosition(vec3(0.0f, 0.9f, 1.5f));
+    player_paddle->setScale(vec3(0.125f, 0.20f, 0.015f)); // 25cm × 40cm × 3cm
+    e->player_paddle = player_paddle;
+
+    // Crear paleta del oponente (Z- atrás)
+    mesh* opponent_paddle = new mesh;
+    create_cube(opponent_paddle, 1.0f);
+    opponent_paddle->setPosition(vec3(0.0f, 0.9f, -1.5f));
+    opponent_paddle->setScale(vec3(0.125f, 0.20f, 0.015f));
+    e->opponent_paddle = opponent_paddle;
+
+    // Inicializar lógica del juego
+    e->game.state = GameState::SERVING;
+    e->game.player_score = 0;
+    e->game.opponent_score = 0;
+    e->game.state_timer = 2.0f;
+    e->game.player_serve = true; // Jugador saca primero
+    e->game.last_paddle_hit = 0;
+    e->game.touched_table = false;
+
+}
+
+void engine_update(Engine *e, float dt)
+{
+    const Uint8 *keys = SDL_GetKeyboardState(NULL);
+    
+    // Reiniciar juego con R
+    if(keys[SDL_SCANCODE_R]) {
+        e->game.state = GameState::SERVING;
+        e->game.player_score = 0;
+        e->game.opponent_score = 0;
+        e->game.state_timer = 2.0f;
+        e->game.player_serve = true;
+        e->game.last_paddle_hit = 0;
+        e->game.touched_table = false;
+        init_ball(e->ball_entity);
+    }
+    
+    // Ralentizar tiempo para debugging
+    if(keys[SDL_SCANCODE_G]) {
+        dt *= 0.2f;
+    }
+    
+    // Actualizar control de jugador con mouse
+    update_player_paddle(e);
+    
+    // Actualizar IA del oponente
+    update_opponent_ai(e, dt);
+    
+    // Actualizar física de la pelota (solo si no está en GAME_OVER o SERVING sin timer)
+    if (e->game.state == GameState::PLAYING || 
+        (e->game.state == GameState::SERVING && e->game.state_timer < 1.8f) ||
+        e->game.state == GameState::POINT_SCORED) {
+        update_physics(e->ball_entity, e->meshes, dt);
+        
+        // Verificar colisiones con paletas
+        check_paddle_collision(e->ball_entity, e->player_paddle, 1, e);
+        check_paddle_collision(e->ball_entity, e->opponent_paddle, 2, e);
+    }
+
+    //Parent the outline to the ball for a simple glow effect
+    
+    // Actualizar lógica del juego
+    update_game_logic(e, e->ball_entity, dt);
+    e->ball_outline->setPosition(e->ball_entity->pos);
+
+    // Cámara fija (sin movimiento libre)
+    // == CAMERA ONLY ==
+    #ifdef DEBUG_CAMERA 
+        int mdx = 0, mdy = 0;
+        SDL_GetRelativeMouseState(&mdx, &mdy);
+        
+        float d_yaw = float(mdx) * kMouseSensitivity * 0;
+        float d_pitch = float(mdy) * kMouseSensitivity * 0;
+
+
+        vec3 inputDir(0.0f, 0.0f, 0.0f);
+        if (keys[SDL_SCANCODE_W])
+            inputDir.z -= 1.0f;
+        if (keys[SDL_SCANCODE_S])
+            inputDir.z += 1.0f;
+        if (keys[SDL_SCANCODE_A])
+            inputDir.x -= 1.0f;
+        if (keys[SDL_SCANCODE_D])
+            inputDir.x += 1.0f;
+        if (keys[SDL_SCANCODE_LSHIFT])
+            inputDir.y -= 1.0f;
+        if (keys[SDL_SCANCODE_SPACE])
+            inputDir.y += 1.0f;
+        float s = sinf(e->yaw);
+        float c = cosf(e->yaw);
+
+
+        //use arrow kkeys and + - to control the target position of the camera, then lerp the actual camera position to it for a smooth movement
+        vec3 inputDirTarget(0.0f, 0.0f, 0.0f);
+        if (keys[SDL_SCANCODE_UP])
+            inputDirTarget.z -= 1.0f;
+        if (keys[SDL_SCANCODE_DOWN])
+            inputDirTarget.z += 1.0f;
+        if (keys[SDL_SCANCODE_LEFT])
+            inputDirTarget.x -= 1.0f;
+        if (keys[SDL_SCANCODE_RIGHT])
+            inputDirTarget.x += 1.0f;
+        if (keys[SDL_SCANCODE_KP_PLUS])
+            inputDirTarget.y += 1.0f;
+        if (keys[SDL_SCANCODE_KP_MINUS])
+            inputDirTarget.y -= 1.0f;
+
+        //apply to target with a speed of 1 units per second
+        e->target = e->target + inputDirTarget * dt * 1.0f;
+
+        vec3 moveDir;
+        moveDir.x = (inputDir.x * c - inputDir.z * s) * moveSpeed;
+        moveDir.z = (inputDir.x * s + inputDir.z * c) * moveSpeed;
+        moveDir.y = inputDir.y * moveSpeed;
+        e->position = e->position + moveDir * dt;
+        e->yaw += d_yaw;
+        e->pitch += d_pitch;
+        e->pitch = std::clamp(e->pitch, to_radians(-85.0f), to_radians(85.0f));
+        e->cam.setPosition(e->position);
+        //e->cam.setRotation(vec3(e->pitch, e->yaw, 0.0f));
+        e->cam.lookAt(e->target); // Mirar al centro de la mesa
+    #endif
+}
+
+void engine_render(Engine *e, SDL_Texture *sdl_fb_texture, float dt)
+{
+    e->fb.clear(0xFF222222);
+
+    std::hash<std::string> r;
+
+    //render all the meshes in the engine's mesh map with a simple shader config
+    renderConfig cfg;
+    for (auto &[name, mesh_ptr] : e->meshes)
+    {
+        cfg.baseColor = (uint32_t)r(name); //hash the name to get a color
+        render_mesh(e->fb, e->cam, *mesh_ptr, cfg);
+    }
+
+    //Draw the ball mesh
+    renderConfig ball_cfg;
+    ball_cfg.baseColor = 0xFFFFFFFF; // White color for the ball
+    ball_cfg.ignoreLight = true; // Make the ball unaffected by lighting for better visibility
+    render_mesh(e->fb, e->cam, *e->ball_entity->mesh, ball_cfg);
+
+    renderConfig outline_cfg;
+    outline_cfg.baseColor = 0x88000000; // Cyan color for the outline
+    outline_cfg.ignoreLight = true;
+    render_mesh(e->fb, e->cam, *e->ball_outline, outline_cfg);
+
+    // Renderizar paleta del jugador (azul)
+    renderConfig player_cfg;
+    player_cfg.baseColor = 0xFF0088FF;
+    player_cfg.ignoreLight = true;
+    render_mesh(e->fb, e->cam, *e->player_paddle, player_cfg);
+
+    // Renderizar paleta del oponente (rojo)
+    renderConfig opponent_cfg;
+    opponent_cfg.baseColor = 0xFFFF0000;
+    opponent_cfg.ignoreLight = true;
+    render_mesh(e->fb, e->cam, *e->opponent_paddle, opponent_cfg);
+
+
+    // render the skybox at the end with depth test disabled for a simple implementation
+    render_skybox(e->fb, e->cam, e->skybox_faces);
+    render_gizmo(e->fb, e->cam, vec3{}, 1.0f);
+    
+    // UI - HUD del juego
+    const char* state_names[] = {"SERVING", "PLAYING", "POINT", "GAME_OVER"};
+    char HUD[512] = {0};
+
+    snprintf(HUD, sizeof(HUD), 
+        "=== SIRVE ===\n"
+        "Player (Blue): %d  |  Opponent (Red): %d\n"
+        "State: %s\n"
+        "Serve: %s\n"
+        "Frametime: %.2fms\n"
+        "CAMROT: %.2f %.2f %.2f\n"
+        "CAMPOS %.2f %.2f %.2f\n"
+        "BALL_VEL %.2f %.2f %.2f\n",
+        e->game.player_score, 
+        e->game.opponent_score,
+        state_names[(int)e->game.state],
+        e->game.player_serve ? "Player" : "Opponent",
+        dt * 1000.0f,
+        e->cam._rotation.x, e->cam._rotation.y, e->cam._rotation.z,
+        e->cam._position.x, e->cam._position.y, e->cam._position.z,
+        e->ball_entity->vel.x, e->ball_entity->vel.y, e->ball_entity->vel.z
+    );    
+    
+    draw_text(e->fb, 22, 22, HUD, 0x88000000, 0x88000000); // Sombra
+    draw_text(e->fb, 20, 20, HUD, 0xFFFFFFFF);
+    SDL_UpdateTexture(sdl_fb_texture, NULL, e->fb.colorBuffer, e->fb.width * sizeof(uint32_t));
+}
+
+void engine_handle_events(Engine *e, SDL_Event &event, bool &running)
+{
+    if (event.type == SDL_QUIT)
+        running = false;
+    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
+        running = false;
+}
+
+#endif

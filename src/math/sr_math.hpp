@@ -1,7 +1,7 @@
 #pragma once
 
 //MATH AND LINEAR ALGEBRA HELPERS
-#include "sr_constants.hpp"
-#include "sr_vec.hpp"
-#include "sr_lingalg.hpp"
-#include "sr_helpers.hpp"
+#include <math/sr_constants.hpp>
+#include <math/sr_vec.hpp>
+#include <math/sr_lingalg.hpp>
+#include <math/sr_helpers.hpp>

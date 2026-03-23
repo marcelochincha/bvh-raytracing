@@ -4,135 +4,179 @@
 #include <vector>
 #include <array>
 
+#include <SDL2/SDL_mixer.h>
+
+#include <algorithm>
 #include <math/sr_math.hpp>
 #include <renderer/sr_renderer.hpp>
 #include <renderer/sr_camera.hpp>
 #include <renderer/sr_texture.hpp>
-#include <renderer/sr_text.h>
+#include <renderer/sr_text.hpp>
+#include <engine/sr_engine.hpp>
 
-// #define W_WIDTH 320
-// #define W_HEIGHT 200
+SDL_Window *window;
+SDL_Renderer *renderer;
+SDL_Texture *sdl_fb_texture;
 
-static inline float saturate(float x)
+
+#define W_WIDTH 440 * 2
+#define W_HEIGHT 254 * 2
+constexpr float TARGET_FPS = 90.0f;
+constexpr float TARGET_DELTA_TIME_MS = 1000.0f / TARGET_FPS;
+
+
+struct FDNReverb {
+    static const int N = 4;
+    std::vector<float> delayLines[N];
+    int ptr[N] = {0};
+    int sizes[N] = {1117, 1361, 1637, 1901};
+
+    // Parámetros
+    float decay = 0.1f;
+    float damp = 0.4f;
+    float lastOut[N] = {0};
+
+    // Filtro High-Pass (Corta bajos de la batería)
+    float hp_last_in = 0.0f;
+    float hp_last_out = 0.0f;
+
+    // Pre-Delay
+    std::vector<float> preDelayBuffer;
+    int preDelayPtr = 0;
+
+    FDNReverb() {
+        for(int i=0; i<N; i++) delayLines[i].resize(sizes[i], 0.0f);
+        preDelayBuffer.resize(882, 0.0f); // 40ms aprox
+    }
+
+    float process(float input) {
+        // SEGURIDAD INICIAL
+        if (!std::isfinite(input)) input = 0.0f;
+
+        // --- PASO 1: HIGH PASS (Limpieza de graves) ---
+        float alpha = 0.85f; 
+        float filteredInput = alpha * (hp_last_out + input - hp_last_in);
+        hp_last_in = input;
+        hp_last_out = filteredInput;
+
+        // --- PASO 2: PRE-DELAY ---
+        float delayedInput = preDelayBuffer[preDelayPtr];
+        preDelayBuffer[preDelayPtr] = filteredInput;
+        preDelayPtr = (preDelayPtr + 1) % preDelayBuffer.size();
+
+        // --- PASO 3: LECTURA DE DELAYS + DAMPING ---
+        float s[N];
+        for(int i=0; i<N; i++) {
+            float out = delayLines[i][ptr[i]];
+            // Reset de seguridad si explota
+            if (!std::isfinite(out)) { out = 0.0f; delayLines[i].assign(sizes[i], 0.0f); }
+            
+            lastOut[i] = out + damp * (lastOut[i] - out);
+            s[i] = lastOut[i];
+        }
+
+        // --- PASO 4: MATRIZ DE HADAMARD (Mezcla) ---
+        float f[N];
+        f[0] = (s[0] + s[1] + s[2] + s[3]) * 0.5f * decay;
+        f[1] = (s[0] - s[1] + s[2] - s[3]) * 0.5f * decay;
+        f[2] = (s[0] + s[1] - s[2] - s[3]) * 0.5f * decay;
+        f[3] = (s[0] - s[1] - s[2] + s[3]) * 0.5f * decay;
+
+        for(int i=0; i<N; i++) {
+            float val = delayedInput + f[i];
+            delayLines[i][ptr[i]] = std::tanh(val); 
+            ptr[i] = (ptr[i] + 1) % sizes[i];
+        }
+
+        // --- SALIDA ---
+        float mix = (s[0] + s[1] + s[2] + s[3]) * 0.25f;
+        return std::clamp(mix, -1.0f, 1.0f);
+    }
+};
+FDNReverb globalReverb;
+#define HALF_U16 32768.0f
+void audioCallback(void *userdata, Uint8 *stream, int len)
 {
-    return fminf(1.0f, fmaxf(0.0f, x));
+    Uint16 *fBuffer = reinterpret_cast<Uint16 *>(stream);
+    int totalSamples = len / sizeof(Uint16);
+
+    // PARÁMETRO DE WETNESS (0.0f = Solo música, 1.0f = Solo Reverb)
+    // Ajústalo entre 0.1f y 0.3f para ese efecto de "paz en las nubes"
+    for (int i = 0; i < totalSamples; i++)
+    {
+        float drySample = ((float)fBuffer[i] - HALF_U16) / HALF_U16; // El sonido original (.xm)
+        float wetSample = globalReverb.process(drySample);
+        float mixedOutput = drySample + wetSample;
+        fBuffer[i] = (Uint16)((mixedOutput + 1.0f) * HALF_U16); // Convertir back a Uint8
+    }
 }
 
-float value_ramp_n(float t, int steps)
+
+const int audio_rate = 8192 * 2; // Baja fidelidad para ahorrar CPU
+const Uint16 audio_type = AUDIO_U16; // 32-bit float audio
+
+void init_sdl()
 {
-    t = saturate(t);
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
+    window = SDL_CreateWindow(
+        "sr_lec",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        W_WIDTH, W_HEIGHT, SDL_WINDOW_RESIZABLE);
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    SDL_RenderSetLogicalSize(renderer, W_WIDTH, W_HEIGHT);
+    SDL_RenderSetIntegerScale(renderer, SDL_TRUE);
+    sdl_fb_texture = SDL_CreateTexture(
+        renderer,
+        SDL_PIXELFORMAT_ARGB8888,
+        SDL_TEXTUREACCESS_STREAMING,
+        W_WIDTH, W_HEIGHT);
 
-    if (steps <= 1)
-        return 0.0f;
+        
+    // init audio
+    // Abrir audio a 22kHz para ahorrar CPU en tu software renderer
+    if (Mix_OpenAudio(audio_rate, audio_type, 1, 1024) < 0)
+    {
+        std::cerr << "SDL_mixer could not initialize! SDL_mixer Error: " << Mix_GetError() << std::endl;
+        return;
+    }
 
-    return roundf(t * (steps - 1)) / (steps - 1);
+    printf("SDL_mixer initialized with Freq: %d\n", audio_rate);
+    Mix_Init(MIX_INIT_OGG | MIX_INIT_MOD | MIX_INIT_MP3 | MIX_INIT_MID);
+    Mix_Music *bgm = Mix_LoadMUS("res/music/w_chan.xm");
+    if (!bgm)
+    {
+        std::cerr << "Failed to load background music! SDL_mixer Error: " << Mix_GetError() << std::endl;
+        return;
+    }
+
+    // Registrar y reproducir con reverb post-mix
+    // Mix_SetPostMix(MixingCallback, NULL);
+    //if (Mix_PlayMusic(bgm, -1) == -1)
+    //{
+    //    std::cerr << "Failed to play music! SDL_mixer Error: " << Mix_GetError() << std::endl;
+    //}
+
+    // Change volume
+    //Mix_VolumeMusic(MIX_MAX_VOLUME * 0.1f); // 20% volumen
+    // set audio callback
+    //Mix_SetPostMix(audioCallback, nullptr);
 }
 
 int main(int argc, char *argv[])
 {
 
-    // std::string text_path, model_path;
-    int W_WIDTH = 256, W_HEIGHT = 180;
-    //
-    // if (argc >= 4)
-    //{
-    //    text_path = std::string(argv[1]);
-    //    model_path = std::string(argv[2]);
-    //    W_WIDTH = std::stoi(argv[3]);
-    //    W_HEIGHT = std::stoi(argv[4]);
-    //}
-    // else
-    //{
-    //    printf("ARGC =%d\n", argc);
-    //    std::cout << "Usage: " << argv[0] << " <path_to_texture> <path_to_model> resX resY" << std::endl;
-    //    return -1;
-    //}
-
-    std::cout << "Executable path: " << argv[0] << std::endl;
-
-    // Initiate the visual fb
-    // First initialize the framebuffer
-    framebuffer fb(W_WIDTH, W_HEIGHT);
-    fb.clear(0xFF000000, 1.0f); // Clear to black and max depth
-
-    SDL_Init(SDL_INIT_VIDEO);
-    SDL_Window *window = SDL_CreateWindow(
-        "sr_lec",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        W_WIDTH, W_HEIGHT, SDL_WINDOW_RESIZABLE);
-    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-
-    SDL_RenderSetLogicalSize(renderer, W_WIDTH, W_HEIGHT);
-    SDL_Texture *sdl_fb_texture = SDL_CreateTexture(
-        renderer,
-        SDL_PIXELFORMAT_ARGB8888,
-        SDL_TEXTUREACCESS_STREAMING,
-        W_WIDTH, W_HEIGHT);
-    // The previous step should be handle by the engine module, sr_lec
-
-    // INIT SCENE HERE
-    // I NEED A camera
-    camera cam(vec3(0.0f, 0.0f, 0.0f), vec3(0.0f, 0.0f, 0.0f), 75.0f, float(W_WIDTH) / float(W_HEIGHT), 0.01f, 100.0f);
-
-    pixelShaderFunc funcT = [](pixelCoord c0, void *data)
-    {
-        uint8_t* p = (uint8_t*)data;
-        uint32_t color = *(uint32_t*)(p + 0);
-        float brightness = *(float*)(p + 4);
-        return brightness_color(color, brightness);
-    };
-
-    pixelShader myPXshader{
-        .func = funcT,
-        .data = new uint8_t[8]};
-
-    // mesh skybox = load_ply(model_path);
-    // texture skybox_texture;
-    // if (!load_png_texture(text_path, skybox_texture))
-    //{
-    //     return -1;
-    // }
-    /*
-    mesh floor_mesh;
-    #define FLOOR_SIZE 3.0f
-    // Create a simple floor
-    floor_mesh.vertices = {
-        {{-FLOOR_SIZE, -0.0f, -FLOOR_SIZE}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{FLOOR_SIZE, -0.0f, -FLOOR_SIZE}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-        {{FLOOR_SIZE, -0.0f, FLOOR_SIZE}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
-        {{-FLOOR_SIZE, -0.0f, FLOOR_SIZE}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}},
-    };
-
-    floor_mesh.faces = {
-        {0, 1, 2},
-        {0, 2, 3} // Single face for the floor
-    };
-    */
-
-    // skybox.setPosition(vec3(0.0f, 0.0f, 0.0f));
-    // skybox.setRotation(vec3(SR_PI / 2.0f, 0.0f, 0.0f));
-    // skybox.setScale(vec3(50.0f, 50.0f, 50.0f));
-
-    mesh edificio = load_ply("res/skybox.ply");
-    edificio.setRotation(vec3(SR_PI / 2.0f, 0.0f, 0.0f));
-    fb.clear(0xFF000000, 1.0f);
-
-    // NOW RENDER IT
-    // Main loop, wait until window closed
-
+    init_sdl(); // SDL INIT
     bool running = true;
-    struct Player
-    {
-        vec3 position;
-        float verticalRotation; // Euler angles in radians
-    } player;
-    // player behaves like wolf3d style
-    player.position = vec3(0.0f, 0.0f, 0.0f);
-    player.verticalRotation = 0.0f;
+    bool debugMode = false;
+    Engine *engine = engine_create(W_WIDTH, W_HEIGHT);
 
+    engine_init(engine);
+
+    const float DT = 1.0f / 60;
+    float deltaTimeSeconds = DT;
     uint64_t lastTime, currentTime = SDL_GetTicks64();
-    float deltaTime = 0.0f;
-    float FPS = 0.0f;
+    int frameCount = 0;
+    // main loop
     while (running)
     {
         lastTime = currentTime;
@@ -140,122 +184,60 @@ int main(int argc, char *argv[])
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
-            if (event.type == SDL_QUIT)
-                running = false;
-
-            if (event.type == SDL_WINDOWEVENT)
-                if (event.window.event == SDL_WINDOWEVENT_CLOSE)
-                    running = false;
+            engine_handle_events(engine, event, running);
         }
 
-        // Player input
-        const Uint8 *state = SDL_GetKeyboardState(NULL);
-        float moveSpeed = -4.0f;
-        float turnSpeed = -to_radians(90.0f); // 90 degrees per second
-
-        vec3 moveDirection(0.0f, 0.0f, 0.0f);
-        if (state[SDL_SCANCODE_W])
+        //if debug mode wait for f2
+        if (debugMode)
         {
-            moveDirection.z += moveSpeed;
+            //wait for f2 to be pressed to proceed to the next frame
+            while (true)
+            {
+                SDL_Event debugEvent;
+                if (SDL_PollEvent(&debugEvent))
+                {
+                    engine_handle_events(engine, debugEvent, running);
+                    if (debugEvent.type == SDL_KEYDOWN && debugEvent.key.keysym.scancode == SDL_SCANCODE_F2)
+                    {
+                        deltaTimeSeconds = DT; // Simular 60 FPS en modo debug para no depender del tiempo real
+                        break;
+                    }
+                    if (debugEvent.type == SDL_QUIT)
+                    {
+                        running = false;
+                        break;
+                    }
+                }
+            }
         }
-        if (state[SDL_SCANCODE_S])
+        if (frameCount < 5) // Solo los primeros 5 frames para no spamear la consola
         {
-            moveDirection.z -= moveSpeed;
+            printf("Frame %d: Frametime: %.4f seconds\n", frameCount, deltaTimeSeconds);
+            frameCount++;
         }
-        if (state[SDL_SCANCODE_A])
-        {
-            moveDirection.x += moveSpeed;
-        }
-        if (state[SDL_SCANCODE_D])
-        {
-            moveDirection.x -= moveSpeed;
-        }
-        if (state[SDL_SCANCODE_Q])
-        {
-            moveDirection.y += moveSpeed;
-        }
-        if (state[SDL_SCANCODE_E])
-        {
-            moveDirection.y -= moveSpeed;
-        }
-
-        if (state[SDL_SCANCODE_R])
-        {
-            player.position = vec3{};
-            player.verticalRotation = 0.0f;
-        }
-
-        // Now turn the camera with left and right arrows like wolf3d
-        if (state[SDL_SCANCODE_LEFT])
-        {
-            player.verticalRotation += turnSpeed * (1 / 60.f);
-        }
-        if (state[SDL_SCANCODE_RIGHT])
-        {
-            player.verticalRotation -= turnSpeed * (1 / 60.f);
-        }
-
-        player.verticalRotation = fmodf(player.verticalRotation, SR_PI * 2.0f);
-
-        // Rotate movement direction based on camera rotation
-        float cosY = cosf(player.verticalRotation);
-        float sinY = sinf(player.verticalRotation);
-
-        // std::cout << "player angle: " << to_degrees(player.verticalRotation) << " deg.\n";
-        mat4 camWorldMat = cam.worldMatrix();
-        vec3 rotatedMove = camWorldMat * vec4(moveDirection.x, moveDirection.y, moveDirection.z,0.0f);
-        player.position = player.position + rotatedMove * (1 / 60.f);
-
-        cam.setPosition(player.position);
-        cam.setRotation(vec3(0.0f, player.verticalRotation, 0.0f));
-
-        // UPDATE ROUTINE
-
-        //  Clear framebuffer
-        fb.clear(0xFF000000, 1.0f);
-        // Now traslate the main mesh every frame
-        // floor_mesh.modelMatrix = translationMatrix(vec3(0.0f, 0.0f, 0.0f)) * rotationMatrix(to_radians(90.0f), SDL_GetTicks() / 1000.0f, 0.0f);
-        // cam.setFov(60.0f + 30.0f * sin(SDL_GetTicks() / 1000.0f));
-        // render_mesh(fb, floor_mesh, cam, 0xFF00BBFF);
-        // render_textured_mesh(fb, skybox, cam, skybox_texture);
-        // render_mesh(fb, cam, skybox);
-        //printf("Player pos: (%f, %f, %f)\n", player.position.x, player.position.y, player.position.z);
-        render_mesh(fb, cam, edificio, myPXshader);
-        //printf("Camera pos: (%f, %f, %f)\n", cam._position.x, cam._position.y, cam._position.z);
-        render_gizmo(fb,cam,vec3(0,0,0),2.0f);
-        //printf("----\n");
-        // render_wireframe(fb, edificio, cam, 0xFFFFFF00);
-        //  render_wireframe(fb, floor_mesh, cam, 0xFF00FFFF);
-
-        // tHIS SHOULD BE HANDLE ALSO BY THE ENGINE
-        //  Here would go rendering code to draw into fb.colorBuffer and fb.depthBuffer
-
-        //Print to screen
-        //FPS
+        engine_update(engine, deltaTimeSeconds);
+        engine_render(engine, sdl_fb_texture, deltaTimeSeconds);
 
 
-        char HUD[64];
-        snprintf(HUD, sizeof(HUD), "FPS: %.4f \nPOS: %.4f %.4f %.4f \nROT: %.4f %.4f %.4f", 1.0f / deltaTime, player.position.x, player.position.y, player.position.z, 0.0f, to_degrees(player.verticalRotation), 0.0f);
-        draw_text(fb, 5,5, HUD, 0xFFFFFF00);
 
-        SDL_UpdateTexture(sdl_fb_texture, NULL, fb.colorBuffer, W_WIDTH * sizeof(uint32_t));
-        // Render to screen
+        //  Render to screen
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, sdl_fb_texture, NULL, NULL);
         SDL_RenderPresent(renderer);
 
+        // wait
         currentTime = SDL_GetTicks64();
-        //compare delta time
-        //FRAME END
-        deltaTime = (currentTime - lastTime) / 1000.0f; //O(1)
-        //if (currentTime % 100 < 50)
-        //{
-        //    printf("Delta Time: %.6f seconds\n", deltaTime);
-        //    FPS = 1.0f / deltaTime;
-        //}
+        if (currentTime - lastTime < TARGET_DELTA_TIME_MS)
+        {
+            SDL_Delay(TARGET_DELTA_TIME_MS - (currentTime - lastTime));
+            currentTime = SDL_GetTicks64();
+        }
+        deltaTimeSeconds = (currentTime - lastTime) / 1000.0f;
+
+        // frame cap
     }
 
-    // CLEAR EVERYTHING
+    // DIETARY CLEANUP
     SDL_DestroyTexture(sdl_fb_texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

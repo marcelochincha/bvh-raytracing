@@ -1,12 +1,16 @@
 #pragma once
 
 #include <math/sr_math.hpp>
-#include <cstdint>
+// #include <cstdint>
 
+
+//Camera struct with position, rotation (in radians), fov, aspect ratio, near and far planes, and view/projection matrices
+// The coordinate system the default order ZYX (yaw-pitch-roll) is used for rotations, matrices are reprsented in column-major order
+// Forward vector is -Z, right is +X, up is +Y
 struct camera
 {
-    vec3 _position;
-    vec3 _rotation;
+    mutable vec3 _position;
+    mutable vec3 _rotation;
     float _fov;
     float _aspectRatio;
     float _nearPlane;
@@ -18,98 +22,25 @@ struct camera
     mutable bool _projectionDirty = true;
     mutable bool _rotationMatrixDirty = true;
 
-    void recalculateRotationMatrix() const
-    {
-        // printf("RECALCULATED!!\n");
-        _rotationMatrix = rotationMatrix(_rotation.x, _rotation.y, _rotation.z);
-        _rotationMatrixDirty = false;
-    }
+    void recalculateRotationMatrix() const;
+    void recalculateViewMatrix() const;
+    void recalculateProjectionMatrix() const;
 
-    void recalculateViewMatrix() const
-    {
-        //_rotationMatrix = rotationMatrix(_rotation.x,_rotation.y, _rotation.z);
-        mat4 cam_translataion = translationMatrix(-_position);
-        _viewMatrix = transpose(this->rotation()) * cam_translataion;
-        _viewDirty = false;
-    }
+    camera();
+    camera(vec3 position, vec3 rotation, float fov, float aspectRatio, float nearPlane, float farPlane);
 
-    void recalculateProjectionMatrix() const
-    {
-        float a = tanf(to_radians(_fov) * 0.5f);
-        float b = a * _aspectRatio;
-        float c = (_farPlane + _nearPlane) / (_farPlane - _nearPlane);
-        float d = -(2.0f * _farPlane * _nearPlane) / (_farPlane - _nearPlane);
-        _projectionMatrix = mat4(
-            1 / b, 0.0f, 0.0f, 0.0f,
-            0.0f, 1 / a, 0.0f, 0.0f,
-            0.0f, 0.0f, -c, -1,
-            0.0f, 0.0f, d, 0.0f);
-        _projectionDirty = false;
-    }
-    camera()
-        : _position(0.0f, 0.0f, 0.0f), _rotation(0.0f, 0.0f, 0.0f), _fov(90.0f), _aspectRatio(4.0f / 3.0f), _nearPlane(0.1f), _farPlane(100.0f)
-    {
-        recalculateViewMatrix();
-        recalculateProjectionMatrix();
-    }
+    // getters
+    const mat4 &view() const;
+    const mat4 &projection() const;
+    const mat4 &rotation() const;
+    const vec3 lookVector() const;
+    const mat4 worldMatrix() const;
 
-    camera(vec3 position, vec3 rotation, float fov, float aspectRatio, float nearPlane, float farPlane)
-        : _position(position), _rotation(rotation), _fov(fov), _aspectRatio(aspectRatio), _nearPlane(nearPlane), _farPlane(farPlane)
-    {
-        recalculateViewMatrix();
-        recalculateProjectionMatrix();
-    }
+    // setters 
+    void setPosition(const vec3 &p);
+    void setRotation(const vec3 &r);
+    void setFov(float f);
 
-    const mat4 &view() const
-    {
-        if (_viewDirty)
-            recalculateViewMatrix();
-        return _viewMatrix;
-    }
-
-    const mat4 &projection() const
-    {
-        if (_projectionDirty)
-            recalculateProjectionMatrix();
-        return _projectionMatrix;
-    }
-
-    const mat4 &rotation() const
-    {
-        if (_rotationMatrixDirty)
-            recalculateRotationMatrix();
-        return _rotationMatrix;
-    }
-
-    const vec3 lookVector() const
-    {
-        mat4 cam_rt = this->rotation();
-        vec4 lv = cam_rt * vec3(0, 0, -1);
-        return vec3(lv.x, lv.y, lv.z);
-    }
-
-    const mat4 worldMatrix() const
-    {
-        mat4 t = translationMatrix(_position);
-        mat4 r = this->rotation();
-        return t * r;
-    }
-
-    // setters controlados que marcan dirty
-    void setPosition(const vec3 &p)
-    {
-        _position = p;
-        _viewDirty = true;
-    }
-    void setRotation(const vec3 &r)
-    {
-        _rotation = r;
-        _viewDirty = true;
-        _rotationMatrixDirty = true;
-    }
-    void setFov(float f)
-    {
-        _fov = f;
-        _projectionDirty = true;
-    }
+    // Utility functions
+    void lookAt(const vec3 &target, const vec3 &up = vec3(0.0f, 1.0f, 0.0f));
 };

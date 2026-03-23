@@ -142,13 +142,7 @@ inline mat4 scalingMatrix(const vec3 &scale)
     return result;
 }
 
-inline mat4 rotationMatrix(float pitch, float yaw, float roll) // Euler angles in radians
-{
-    mat4 rx = rotationMatrix(pitch, vec3(1, 0, 0));
-    mat4 ry = rotationMatrix(yaw, vec3(0, 1, 0));
-    mat4 rz = rotationMatrix(roll, vec3(0, 0, 1));
-    return rz * ry * rx; // ZYX order
-} 
+
 
 inline mat4 transpose(const mat4 &m)
 {
@@ -158,4 +152,45 @@ inline mat4 transpose(const mat4 &m)
     r(2,0) = m(0,2); r(2,1) = m(1,2); r(2,2) = m(2,2); r(2,3) = m(3,2);
     r(3,0) = m(0,3); r(3,1) = m(1,3); r(3,2) = m(2,3); r(3,3) = m(3,3);
     return r;
+}
+
+
+
+// Returns a rotation matrix from Euler angles (in radians) IN ZYX order (yaw-pitch-roll)
+inline mat4 rotationMatrix(float pitch, float yaw, float roll) // Euler angles in radians
+{
+    mat4 rx = rotationMatrix(-pitch, vec3(1, 0, 0));
+    mat4 ry = rotationMatrix(-yaw, vec3(0, 1, 0));
+    mat4 rz = rotationMatrix(-roll, vec3(0, 0, 1));
+    return rz * ry * rx; // ZYX order
+} 
+
+//Returns the Euler angles (in radians) from a rotation matrix (assuming ZYX order)
+inline vec3 getEulerAngles(const mat4 &m)
+{
+    float pitch, yaw, roll;
+    if (m(0, 2) < 1)
+    {
+        if (m(0, 2) > -1)
+        {
+            yaw = asinf(-m(0, 2));
+            pitch = atan2f(m(0, 1), m(0, 0));
+            roll = atan2f(m(1, 2), m(2, 2));
+        }
+        else
+        {
+            // Not a unique solution: roll - pitch = atan2(-m10,m11)
+            yaw = M_PI / 2.0f;
+            pitch = atan2f(-m(1, 0), m(1, 1));
+            roll = 0;
+        }
+    }
+    else
+    {
+        // Not a unique solution: roll + pitch = atan2(-m10,m11)
+        yaw = -M_PI / 2.0f;
+        pitch = atan2f(-m(1, 0), m(1, 1));
+        roll = 0;
+    }
+    return vec3(pitch, yaw, roll);
 }
