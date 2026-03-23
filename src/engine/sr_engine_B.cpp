@@ -416,7 +416,7 @@ void engine_update(Engine *e, float dt)
         vec3 random_init = get_random_point_in_zone(-0.20f, 0.20f, 1.5f, 2.5f) + vec3(0.0f,(rand() % 150) / 100.0f + 0.1,0.0f); // Random initial position for the ball to add variety
         init_ball(e->ball_entity, random_init);
 
-        vec3 rally_direction = find_rally_direction(e->ball_entity, random_target, 10.0f, e->meshes);
+        vec3 rally_direction = vec3{0,10,0};//find_rally_direction(e->ball_entity, random_target, 10.0f, e->meshes);
         e->ball_entity->vel = rally_direction * 10.0f; // Set
         e->meshes["TARGET"]->setPosition(random_target);
     }
