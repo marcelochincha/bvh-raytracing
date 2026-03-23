@@ -1,1 +1,0 @@
-C:\mingw64\bin\g++.exe -v .\src\%1.cpp -Ithird_party -Isrc -Llib -lmingw32 -lSDL2main -lSDL2  -O0 -o bin\%1 -g
