@@ -19,4 +19,4 @@ struct texture
     }
 };
 
-bool load_png_texture(const std::string &filename, texture &m);
+bool load_png_texture(const std::string &filename, texture &m, int max_size = 256);

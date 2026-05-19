@@ -45,3 +45,12 @@ void render_mesh(framebuffer &fb, const camera &cam, const mesh &m, renderConfig
 void render_skybox(framebuffer &fb, const camera &cam, std::array<texture, 6> &skyboxTextures);
 void draw_gizmo_line(framebuffer &fb, const camera &cam, const vec3 &start, const vec3 &end, uint32_t color);
 void render_gizmo(framebuffer &fb, const camera &cam, const vec3 &pos, float size);
+
+// Pixel-by-pixel 3D line segment with depth test + per-pixel color lerp.
+// Treats the segment as a real 3D object: gets occluded by anything closer
+// in the depth buffer, and writes its own depth so subsequent draws occlude
+// it too. `color_a` is at point `a`, `color_b` is at point `b`; the renderer
+// linearly interpolates RGB along the screen-space DDA walk.
+void draw_segment_3d(framebuffer &fb, const camera &cam,
+                     const vec3 &a, const vec3 &b,
+                     uint32_t color_a, uint32_t color_b);

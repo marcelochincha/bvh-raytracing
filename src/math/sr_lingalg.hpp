@@ -163,7 +163,7 @@ inline mat4 rotationMatrix(float pitch, float yaw, float roll) // Euler angles i
     mat4 ry = rotationMatrix(-yaw, vec3(0, 1, 0));
     mat4 rz = rotationMatrix(-roll, vec3(0, 0, 1));
     return rz * ry * rx; // ZYX order
-} 
+}
 
 //Returns the Euler angles (in radians) from a rotation matrix (assuming ZYX order)
 inline vec3 getEulerAngles(const mat4 &m)

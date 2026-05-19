@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 camera::camera()
-    : _position(0.0f, 0.0f, 0.0f), _rotation(0.0f, 0.0f, 0.0f), _fov(90.0f), _aspectRatio(4.0f / 3.0f), _nearPlane(0.1f), _farPlane(100.0f)
+    : _position(0.0f, 0.0f, 0.0f), _rotation(0.0f, 0.0f, 0.0f), _fov(90.0f), _aspectRatio(1.0f), _nearPlane(0.1f), _farPlane(100.0f)
 {
     recalculateViewMatrix();
     recalculateProjectionMatrix();
@@ -19,7 +19,7 @@ camera::camera(vec3 position, vec3 rotation, float fov, float aspectRatio, float
 
 void camera::recalculateRotationMatrix() const
 {
-    _rotationMatrix = rotationMatrix(-_rotation.x, -_rotation.y, -_rotation.z);
+    _rotationMatrix = rotationMatrix(_rotation.x, -_rotation.y, -_rotation.z);
     _rotationMatrixDirty = false;
 }
 
@@ -33,8 +33,10 @@ void camera::recalculateViewMatrix() const
 
 void camera::recalculateProjectionMatrix() const
 {
-    float a = tanf(to_radians(_fov) * 0.5f);
-    float b = a * _aspectRatio;
+    // HORIZONTAL FOV COMPUTE
+    float b = tanf(to_radians(_fov) * 0.5f);
+    float a = b / _aspectRatio;
+
     float c = (_farPlane + _nearPlane) / (_farPlane - _nearPlane);
     float d = -(2.0f * _farPlane * _nearPlane) / (_farPlane - _nearPlane);
     _projectionMatrix = mat4(

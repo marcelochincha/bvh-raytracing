@@ -7,6 +7,9 @@
 //Camera struct with position, rotation (in radians), fov, aspect ratio, near and far planes, and view/projection matrices
 // The coordinate system the default order ZYX (yaw-pitch-roll) is used for rotations, matrices are reprsented in column-major order
 // Forward vector is -Z, right is +X, up is +Y
+
+// fov is the HORIZONTAL FOV, todo this.
+
 struct camera
 {
     mutable vec3 _position;

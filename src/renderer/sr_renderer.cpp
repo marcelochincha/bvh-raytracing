@@ -511,3 +511,54 @@ void render_gizmo(framebuffer &fb, const camera &cam, const vec3 &pos, float siz
     draw_gizmo_line(fb, cam, pos, pos + vec3(0, size, 0), 0xFF00FF00);
     draw_gizmo_line(fb, cam, pos, pos + vec3(0, 0, size), 0xFF0000FF);
 }
+
+void draw_segment_3d(framebuffer &fb, const camera &cam,
+                     const vec3 &a, const vec3 &b,
+                     uint32_t color_a, uint32_t color_b)
+{
+    vec4 a_clip = cam.projection() * cam.view() * vec4(a.x, a.y, a.z, 1.0f);
+    vec4 b_clip = cam.projection() * cam.view() * vec4(b.x, b.y, b.z, 1.0f);
+
+    // Cull whole segment if either endpoint is behind the camera.
+    if (a_clip.w <= 0.0f || b_clip.w <= 0.0f) return;
+
+    vec3 a_ndc = a_clip / a_clip.w;
+    vec3 b_ndc = b_clip / b_clip.w;
+    vec3 a_scr = convert_to_fb(fb, a_ndc);
+    vec3 b_scr = convert_to_fb(fb, b_ndc);
+
+    float dx_s = b_scr.x - a_scr.x;
+    float dy_s = b_scr.y - a_scr.y;
+    int steps = (int)std::max(std::fabs(dx_s), std::fabs(dy_s));
+    if (steps == 0) steps = 1;
+
+    float inv_steps = 1.0f / (float)steps;
+    float dx = dx_s * inv_steps;
+    float dy = dy_s * inv_steps;
+    float dz = (b_ndc.z - a_ndc.z) * inv_steps;
+
+    float x = a_scr.x, y = a_scr.y, z = a_ndc.z;
+
+    uint8_t ar = (color_a >> 16) & 0xFF, ag = (color_a >> 8) & 0xFF, ab = color_a & 0xFF;
+    uint8_t br = (color_b >> 16) & 0xFF, bg = (color_b >> 8) & 0xFF, bb = color_b & 0xFF;
+
+    for (int i = 0; i <= steps; ++i)
+    {
+        int xi = (int)x;
+        int yi = (int)y;
+        if (xi >= 0 && xi < fb.width && yi >= 0 && yi < fb.height)
+        {
+            int idx = yi * fb.width + xi;
+            if (z < fb.depthBuffer[idx])
+            {
+                float t = (float)i * inv_steps;
+                uint8_t r = (uint8_t)(ar + (br - ar) * t);
+                uint8_t g = (uint8_t)(ag + (bg - ag) * t);
+                uint8_t bch = (uint8_t)(ab + (bb - ab) * t);
+                fb.colorBuffer[idx] = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)bch;
+                fb.depthBuffer[idx] = z;
+            }
+        }
+        x += dx; y += dy; z += dz;
+    }
+}
