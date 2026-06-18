@@ -14,7 +14,7 @@ struct camera
 {
     mutable vec3 _position;
     mutable vec3 _rotation;
-    float _fov;
+    float _fov; //fov stored in DEGREES for easier use and compute
     float _aspectRatio;
     float _nearPlane;
     float _farPlane;

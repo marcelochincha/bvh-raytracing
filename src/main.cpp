@@ -108,6 +108,7 @@ int main(int argc, char *argv[])
         deltaTimeSeconds = (currentTime - lastTime) / 1000.0f;
     }
 
+    game_shutdown(game);
     sound_shutdown();
     SDL_DestroyTexture(sdl_fb_texture);
     SDL_DestroyRenderer(renderer);

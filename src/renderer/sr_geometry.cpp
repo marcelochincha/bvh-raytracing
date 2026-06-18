@@ -1,5 +1,12 @@
 #include <renderer/sr_geometry.hpp>
 
+// Header-aware ASCII PLY loader. Instead of assuming a fixed "X Y Z S T" vertex
+// layout and three bare indices per face, it parses the header to learn how many
+// properties each vertex carries (and where x/y/z and the optional texcoords sit)
+// and reads faces as a `list` (leading count + that many indices), fan-
+// triangulating polygons with more than 3 sides. This makes it eat the common
+// PLYs found in the wild (position-only scans, vertices with normals/colors,
+// quad faces) rather than just our own exporter's output.
 mesh load_ply_ascii(const std::string &filename)
 {
     mesh m;
@@ -13,49 +20,72 @@ mesh load_ply_ascii(const std::string &filename)
     std::string line;
     size_t num_vertices = 0;
     size_t num_faces = 0;
+
+    int vprops = 0;        // total properties listed per vertex
+    int idx_pos = -1;      // index of the 'x' property (y,z assumed to follow)
+    int idx_uv  = -1;      // index of the 's'/'u' property (t/v assumed to follow)
+    std::string element;   // which element's properties we're currently reading
+
     while (std::getline(plyfile, line))
     {
-        if (line.rfind("element vertex", 0) == 0)
+        std::istringstream ss(line);
+        std::string tok;
+        ss >> tok;
+        if (tok == "element")
         {
-            std::sscanf(line.c_str(), "element vertex %zu", &num_vertices);
+            std::string ename; size_t count = 0;
+            ss >> ename >> count;
+            element = ename;
+            if (ename == "vertex") num_vertices = count;
+            else if (ename == "face") num_faces = count;
         }
-        else if (line.rfind("element face", 0) == 0)
+        else if (tok == "property" && element == "vertex")
         {
-            std::sscanf(line.c_str(), "element face %zu", &num_faces);
+            std::string type, name;
+            ss >> type >> name; // for vertices: scalar "property <type> <name>"
+            if (name == "x") idx_pos = vprops;
+            if (name == "s" || name == "u" || name == "texture_u") idx_uv = vprops;
+            vprops++;
         }
-        else if (line == "end_header")
+        else if (tok == "end_header")
         {
             break;
         }
     }
-
-    m.vertices.reserve(num_vertices);
-    m.faces.reserve(num_faces);
+    if (idx_pos < 0) idx_pos = 0; // assume x/y/z come first if unlabeled
 
     std::cout << "PLY has " << num_vertices << " vertices and " << num_faces << " faces.\n";
 
-    std::cout << "Loading vertices...\n";
+    m.vertices.reserve(num_vertices);
     for (size_t i = 0; i < num_vertices; ++i)
     {
-        std::getline(plyfile, line);
+        if (!std::getline(plyfile, line)) break;
         std::istringstream p(line);
-        vertex v;
+        float vals[32];
+        int n = 0;
+        while (n < 32 && (p >> vals[n])) ++n;
 
-        // format is X Y Z S T
-        p >> v.p.x >> v.p.y >> v.p.z >> v.t.x >> v.t.y;
+        vertex v{};
+        if (n >= idx_pos + 3)
+            v.p = vec3(vals[idx_pos], vals[idx_pos + 1], vals[idx_pos + 2]);
+        if (idx_uv >= 0 && n >= idx_uv + 2)
+            v.t = vec2(vals[idx_uv], vals[idx_uv + 1]);
         m.vertices.push_back(v);
     }
 
-    std::cout << "Loading faces...\n";
+    m.faces.reserve(num_faces);
     for (size_t i = 0; i < num_faces; ++i)
     {
-        std::getline(plyfile, line);
+        if (!std::getline(plyfile, line)) break;
         std::istringstream p(line);
-
-        // Since they are index first store
-        uint32_t v1, v2, v3, n;
-        p >> v1 >> v2 >> v3;
-        m.faces.push_back((triangle){v1, v2, v3});
+        int count = 0;
+        p >> count; // `list` faces start with the index count
+        uint32_t idx[64];
+        int n = 0;
+        for (int k = 0; k < count && n < 64 && (p >> idx[n]); ++k) ++n;
+        // Fan-triangulate (works for triangles and convex quads/polygons).
+        for (int k = 2; k < n; ++k)
+            m.faces.push_back((triangle){idx[0], idx[k - 1], idx[k]});
     }
     std::cout << "Done\n";
     return m;
@@ -231,6 +261,29 @@ void create_cylinder(mesh* m, float radius, float height, int segments)
         m->faces.push_back((triangle){top1, bottom1, top2});
         m->faces.push_back((triangle){top2, bottom1, bottom2});
     }
+
+    // Cap centers
+    uint32_t center_top    = (uint32_t)m->vertices.size();
+    m->vertices.push_back({{0.0f,  half_h, 0.0f}, {0.5f, 0.5f}});
+    uint32_t center_bottom = (uint32_t)m->vertices.size();
+    m->vertices.push_back({{0.0f, -half_h, 0.0f}, {0.5f, 0.5f}});
+
+    // Top/bottom cap fans. The renderer culls faces whose cross(v1-v0, v2-v0)
+    // points AWAY from the volume center (same convention create_cube uses),
+    // so the winding here is chosen to make the cross-normal point INWARD:
+    // -Y for the top cap, +Y for the bottom cap.
+    for (int i = 0; i < segments; ++i)
+    {
+        uint32_t top1    = i * 2;
+        uint32_t top2    = (i + 1) * 2;
+        uint32_t bottom1 = top1 + 1;
+        uint32_t bottom2 = top2 + 1;
+
+        // Top cap
+        m->faces.push_back((triangle){center_top, top1, top2});
+        // Bottom cap
+        m->faces.push_back((triangle){center_bottom, bottom2, bottom1});
+    }
 }
 
 void create_wedge(mesh* m, float width, float height, float depth)
@@ -239,28 +292,29 @@ void create_wedge(mesh* m, float width, float height, float depth)
     float half_h = height / 2.0f;
     float half_d = depth / 2.0f;
 
-    // Define vertices for a wedge
+    // A wedge is a triangular prism: a rectangular base, a vertical back wall
+    // at z = -half_d, and a single sloped face running down to the front-bottom
+    // edge. Cross-section (in the Y-Z plane) is a right triangle, extruded along
+    // X. Exactly 6 vertices — the old code had a spurious 7th that produced a
+    // malformed roof polygon.
     m->vertices = {
-        {{-half_w, -half_h, -half_d}, {0, 0}}, // 0
-        {{half_w, -half_h, -half_d}, {1, 0}},  // 1
-        {{half_w, -half_h, half_d}, {1, 1}},   // 2
-        {{-half_w, -half_h, half_d}, {0, 1}},  // 3
-        {{-half_w, half_h, -half_d}, {0, 0}},  // 4
-        {{half_w, half_h, -half_d}, {1, 0}},   // 5
-        {{-half_w, half_h, half_d}, {0, 1}}    // 6
+        {{-half_w, -half_h, -half_d}, {0, 0}}, // 0 back-bottom-left
+        {{ half_w, -half_h, -half_d}, {1, 0}}, // 1 back-bottom-right
+        {{ half_w, -half_h,  half_d}, {1, 1}}, // 2 front-bottom-right
+        {{-half_w, -half_h,  half_d}, {0, 1}}, // 3 front-bottom-left
+        {{-half_w,  half_h, -half_d}, {0, 1}}, // 4 back-top-left
+        {{ half_w,  half_h, -half_d}, {1, 1}}, // 5 back-top-right
     };
 
-    // Define faces (2 triangles per rectangular face)
+    // Winding is wound so cross(v1-v0, v2-v0) points INWARD, matching
+    // create_cube and the renderer's backface-culling convention. The
+    // raytracer is unaffected (it flips the normal to face the ray).
     m->faces = {
-        {0, 1, 2},
-        {0, 2, 3}, // Bottom
-        {4, 5, 1},
-        {4, 1, 0}, // Back
-        {3, 2, 5},
-        {3, 5, 4}, // Front
-        {4, 0, 3},
-        {4, 3, 6}, // Left
-        {1, 5, 2}, // Right (triangular face)
+        {0, 2, 1}, {0, 3, 2}, // Bottom (y = -half_h)
+        {0, 1, 5}, {0, 5, 4}, // Back wall (z = -half_d)
+        {4, 5, 2}, {4, 2, 3}, // Slope (top-back edge -> front-bottom edge)
+        {0, 4, 3},            // Left triangular side (x = -half_w)
+        {1, 2, 5},            // Right triangular side (x =  half_w)
     };
 }
 

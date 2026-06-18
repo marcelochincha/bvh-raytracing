@@ -485,24 +485,74 @@ void render_skybox(framebuffer &fb, const camera &cam, std::array<texture, 6> &s
     }
 }
 
+// Clip a clip-space segment against the near plane (w >= w_min). Without this,
+// a segment with an endpoint behind the camera (w <= 0) would divide by a
+// non-positive w and produce garbage, so the old code just discarded it whole.
+// Here we instead move the offending endpoint onto the near plane. Returns
+// false only if the whole segment is behind the camera.
+static bool clip_near_plane(vec4 &a, vec4 &b, float w_min)
+{
+    bool a_in = a.w >= w_min;
+    bool b_in = b.w >= w_min;
+    if (a_in && b_in) return true;
+    if (!a_in && !b_in) return false;
+    float t = (w_min - a.w) / (b.w - a.w);
+    vec4 m = a + (b - a) * t;     // interpolate in clip space
+    if (!a_in) a = m; else b = m;
+    return true;
+}
+
+// Cohen-Sutherland region code for 2D viewport clipping.
+static int cs_outcode(float x, float y, int w, int h)
+{
+    int c = 0;
+    if (x < 0)            c |= 1;
+    else if (x >= w)      c |= 2;
+    if (y < 0)            c |= 4;
+    else if (y >= h)      c |= 8;
+    return c;
+}
+
+// Clip a 2D segment to the viewport rectangle. Returns false if fully outside.
+// (draw_line already skips off-screen pixels, but clipping here avoids walking
+// a huge off-screen span and the int overflow that long lines could cause.)
+static bool clip_segment_2d(float &x0, float &y0, float &x1, float &y1, int w, int h)
+{
+    float xmax = (float)(w - 1), ymax = (float)(h - 1);
+    int c0 = cs_outcode(x0, y0, w, h);
+    int c1 = cs_outcode(x1, y1, w, h);
+    while (true) {
+        if (!(c0 | c1)) return true;  // both inside
+        if (c0 & c1)    return false; // both share an outside region -> reject
+        int co = c0 ? c0 : c1;
+        float x = 0.0f, y = 0.0f;
+        if (co & 8)      { x = x0 + (x1 - x0) * (ymax - y0) / (y1 - y0); y = ymax; }
+        else if (co & 4) { x = x0 + (x1 - x0) * (0.0f - y0) / (y1 - y0); y = 0.0f; }
+        else if (co & 2) { y = y0 + (y1 - y0) * (xmax - x0) / (x1 - x0); x = xmax; }
+        else             { y = y0 + (y1 - y0) * (0.0f - x0) / (x1 - x0); x = 0.0f; }
+        if (co == c0) { x0 = x; y0 = y; c0 = cs_outcode(x0, y0, w, h); }
+        else          { x1 = x; y1 = y; c1 = cs_outcode(x1, y1, w, h); }
+    }
+}
+
 void draw_gizmo_line(framebuffer &fb, const camera &cam, const vec3 &start, const vec3 &end, uint32_t color)
 {
-    vec4 start_clip = cam.projection() * cam.view() * vec4(start.x, start.y, start.z, 1.0f);
-    vec4 end_clip = cam.projection() * cam.view() * vec4(end.x, end.y, end.z, 1.0f);
+    mat4 vp = cam.projection() * cam.view();
+    vec4 a = vp * vec4(start.x, start.y, start.z, 1.0f);
+    vec4 b = vp * vec4(end.x,   end.y,   end.z,   1.0f);
 
-    if (start_clip.w <= 0 || end_clip.w <= 0)
-        return;
+    // 1) Near-plane clip (handles endpoints behind the camera).
+    if (!clip_near_plane(a, b, 1e-4f)) return;
 
-    vec3 start_ndc = start_clip / start_clip.w;
-    vec3 end_ndc = end_clip / end_clip.w;
+    // 2) Perspective divide -> screen.
+    vec3 a_scr = convert_to_fb(fb, a / a.w);
+    vec3 b_scr = convert_to_fb(fb, b / b.w);
 
-    vec3 start_screen = convert_to_fb(fb, start_ndc);
-    vec3 end_screen = convert_to_fb(fb, end_ndc);
-    if (start_screen.x < 0 || end_screen.x < 0 || start_screen.x >= fb.width || end_screen.x >= fb.width ||
-        start_screen.y < 0 || end_screen.y < 0 || start_screen.y >= fb.height || end_screen.y >= fb.height)
-        return;
+    // 3) Viewport clip (handles off-screen endpoints instead of discarding).
+    float x0 = a_scr.x, y0 = a_scr.y, x1 = b_scr.x, y1 = b_scr.y;
+    if (!clip_segment_2d(x0, y0, x1, y1, fb.width, fb.height)) return;
 
-    draw_line(fb, static_cast<int>(start_screen.x), static_cast<int>(start_screen.y), static_cast<int>(end_screen.x), static_cast<int>(end_screen.y), color);
+    draw_line(fb, (int)x0, (int)y0, (int)x1, (int)y1, color);
 }
 
 void render_gizmo(framebuffer &fb, const camera &cam, const vec3 &pos, float size)

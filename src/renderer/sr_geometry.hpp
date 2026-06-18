@@ -15,6 +15,13 @@ struct vertex
     vec2 t;
 };
 
+// Axis-aligned bounding box. Lives in the renderer/geometry layer so the
+// raytracer/BVH (and anything else) can use it.
+struct AABB {
+    vec3 min;
+    vec3 max;
+};
+
 struct triangle
 {
     uint32_t v0, v1, v2;
