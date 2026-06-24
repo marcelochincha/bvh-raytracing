@@ -1,0 +1,29 @@
+# Build artifacts
+/build/
+/bin/
+/out/
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.exe
+*.so
+*.dylib
+
+# IDE / editor
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*~
+
+# Heavy assets (not versioned): put room scans / models here
+/res/models/
+
+# Reports (generated)
+*.aux
+*.log
+*.out
+*.toc
+*.pdf

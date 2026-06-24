@@ -1,0 +1,319 @@
+\documentclass[11pt]{article}
+
+% BVH Tree for Raytracing
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\newtheorem{invariant}{Invariant}
+\newtheorem{lemma}{Lemma}
+\newtheorem{theorem}{Theorem}
+
+\title{A Bounding Volume Hierarchy (BVH) for Ray Tracing \\
+       \large Structure, construction heuristic, and algorithmic analysis}
+\author{Advanced Data Structures Project}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We describe the BVH (Bounding Volume Hierarchy) our ray tracer is built on: what
+it partitions, what the decision of \emph{where} to split is based on (the Surface
+Area Heuristic, SAH), and why that yields an $\mathcal{O}(\log N)$ query cost. We
+derive the SAH from geometric probability, analyze the tree's depth to justify the
+cost, and give a correctness argument for the traversal.
+\end{abstract}
+
+% ===========================================================================
+\section{The problem}
+
+A ray tracer shoots one ray per pixel and looks for the first triangle it hits.
+The naive version tests the ray against all $N$ triangles in the scene, so an
+image of $P$ pixels costs $\mathcal{O}(P\cdot N)$. With our scene
+($N \approx 383{,}000$) that is $\sim 10^{11}$ tests per frame: hopeless. We need a
+spatial structure that discards many triangles without testing them.
+
+% ===========================================================================
+\section{The structure}
+
+\subsection{Partition objects, not space}
+
+Acceleration structures fall into two families. \textbf{Space subdivision}
+(kd-tree, octree, grid) partitions the volume into disjoint regions, and a single
+triangle may fall into several. The \textbf{BVH} partitions the \emph{set of
+objects}: each triangle goes to \emph{one} leaf, in exchange for the boxes of
+sibling nodes being allowed to overlap. Since there is no duplication, memory is
+linear and construction is a recursive partition of the triangle array. The
+overlap is exactly what the heuristic tries to minimize.
+
+\subsection{The tree and its invariant}
+
+The BVH is a \textbf{binary tree}; each node stores an axis-aligned bounding box
+(AABB).
+
+\begin{invariant}\label{inv:bound}
+A node's box contains every triangle in its subtree.
+\end{invariant}
+
+\noindent
+It holds by construction (a node's box is the union of its children's). From it
+comes the \textbf{pruning}: if a ray misses a node's box, it misses every triangle
+in that subtree and we skip the whole subtree. That is what makes traversal
+sublinear. We use AABBs because the ray--box test (\emph{slab} method, Williams et
+al.~\cite{williams}) is very cheap and the union of two AABBs is trivial.
+
+\subsection{Memory layout}
+
+A node stores its box and either two child indices (internal) or a range
+\texttt{(start, count)} into the triangle array (leaf). Triangles are
+\textbf{reordered} during construction so that each leaf's triangles are
+contiguous. A tree with $L$ leaves has $2L-1$ nodes and $L \le N$, so there are
+$\le 2N-1$ nodes: \textbf{$\mathcal{O}(N)$ memory}.
+
+% ===========================================================================
+\section{The heuristic (SAH)}
+
+What decides the quality of the tree is \emph{where} we split at each node. A bad
+split leaves big, overlapping boxes that rays enter equally, and little gets
+pruned. The \textbf{Surface Area Heuristic} provides the criterion.
+
+\subsection{Cost model and geometric probability}
+
+The expected cost of a node with children $L$ and $R$ is modeled as
+\[
+C(\text{node}) = C_{\text{trav}} + P(L)\,N_L\,C_{\text{int}} + P(R)\,N_R\,C_{\text{int}},
+\]
+where $N_L, N_R$ are the triangle counts of each child and $P(\cdot)$ is the
+probability that a ray which entered the node also enters that child. By integral
+geometry, for a convex $I$ inside a convex $B$ that probability is the ratio of
+surface areas,
+\[
+P(I \mid B) = \frac{S(I)}{S(B)},
+\]
+which is where the heuristic's name comes from. Normalizing by the parent's area,
+the cost of a candidate split is proportional to
+\[
+\boxed{\;\text{cost} \;\propto\; S(L)\,N_L + S(R)\,N_R\;}
+\]
+We pick the cheapest split, and compare it against not splitting
+($\propto N\,C_{\text{int}}$); if splitting does not help, we make a leaf. That is
+what produces leaves holding several triangles.
+
+\subsection{Binning}
+
+Evaluating every possible split would cost $\mathcal{O}(N\log N)$ per node.
+Instead (Wald~\cite{wald}) we project the \textbf{centroids} onto the longest axis
+of their box --- the axis where they are most spread out, which separates them best
+--- divide it into $K{=}12$ \textbf{bins}, and evaluate only the $K-1$ planes
+between bins, with area and count accumulated by two linear sweeps. Cost of
+choosing the split: $\mathcal{O}(N + K)$ per node.
+
+% ===========================================================================
+\section{Algorithms}
+
+\begin{algorithm}[h]
+\caption{\textsc{BuildNode}(start, count, depth)}
+\begin{algorithmic}[1]
+\State \texttt{bounds} $\gets$ union of the boxes of $[start,start+count)$
+\If{$count \le 2$ \textbf{or} $depth \ge \text{MAX\_DEPTH}$}
+    \State leaf with range $[start, start+count)$; \Return \Comment{base case}
+\EndIf
+\State $axis \gets$ longest side of the centroid box
+\If{centroids nearly coincide on $axis$} leaf; \Return \EndIf
+\State bin into $K{=}12$ bins by centroid on $axis$; left/right sweep
+\State $i^\star \gets \arg\min_i\; S_L(i)\,n_L(i) + S_R(i)\,n_R(i)$
+\If{$1 + \text{cost}(i^\star)/S(\texttt{bounds}) \ge count$} leaf; \Return \Comment{not worth it} \EndIf
+\State $mid \gets \textsc{Partition}(start, count, axis, i^\star)$
+\If{$mid \in \{start,\, start+count\}$} $mid \gets start + count/2$ \Comment{fallback: median} \EndIf
+\State \textsc{BuildNode}$(start, mid-start, depth+1)$
+\State \textsc{BuildNode}$(mid, start+count-mid, depth+1)$
+\end{algorithmic}
+\end{algorithm}
+
+\noindent
+\textsc{Partition} reorders the range \emph{in place} with two indices (quicksort
+partition scheme), $\mathcal{O}(count)$.
+
+\begin{algorithm}[h]
+\caption{\textsc{Intersect}(origin, dir)}
+\begin{algorithmic}[1]
+\State $best \gets +\infty$;\quad $stack \gets [\,\text{root}\,]$
+\While{$stack \neq \emptyset$}
+    \State $n \gets$ pop
+    \If{the ray misses \texttt{n.bounds} within distance $best$} \textbf{continue} \Comment{prune} \EndIf
+    \If{$n$ is a leaf}
+        \ForAll{triangle $t \in n$}
+            \State $d \gets$ \textsc{MollerTrumbore}(origin, dir, $t$)
+            \If{$d$ valid \textbf{and} $d < best$} $best \gets d$; remember $t$ \EndIf
+        \EndFor
+    \Else\ push both children
+    \EndIf
+\EndWhile
+\State \Return nearest triangle (or ``miss'')
+\end{algorithmic}
+\end{algorithm}
+
+\noindent
+Shadows use \textsc{Occluded}: identical, but it returns \emph{true} at the first
+triangle between the point and the light (no need for the nearest one).
+
+% ===========================================================================
+\section{Depth and split analysis}
+
+\subsection{Construction}
+
+The work at a node (boxes, binning, partition) is $\Theta(N)$, so
+\[
+B(N) = \Theta(N) + B(N_L) + B(N_R), \qquad N_L + N_R = N.
+\]
+With balanced splits ($N_L, N_R \approx N/2$), by the Master Theorem
+$B(N) = \Theta(N \log N)$: each level distributes the $N$ triangles without
+repetition ($\Theta(N)$) and there are $\Theta(\log N)$ levels.
+
+\subsection{Why are the splits balanced?}
+
+The SAH does not optimize balance directly, but it favors it: a very unbalanced
+split ($N_L \approx N$) leaves a box almost as large as the parent's holding almost
+all the triangles, so its term $S(L)\,N_L$ barely drops versus not splitting and
+the heuristic rejects it. With reasonably uniform geometry this gives, level by
+level, a geometric reduction $N \to \alpha N$ ($\alpha < 1$ bounded away from $1$),
+i.e.\ expected depth $\mathcal{O}(\log N)$; in practice SAH BVHs measure heights
+close to $\log_2 N$. Moreover, when binning degenerates the algorithm falls back to
+a \textbf{median} split, which halves the set and \emph{guarantees}
+$\le \lceil \log_2 N\rceil$ at that point.
+
+\subsection{Worst case}
+
+If many triangles share a centroid, no plane separates them and the partition may
+peel one off per level: a chain of depth $\Theta(N)$. We bound it by making a leaf
+when the centroid box is degenerate, and with a cap \texttt{MAX\_DEPTH}$=60$ that
+forces a leaf upon reaching it. This bounds the height and, with it, the traversal
+stack (fixed, 64), at the cost of a slightly fatter leaf here and there.
+
+\subsection{Query}
+
+Under the SAH model (small, weakly overlapping child boxes) a ray visits
+$\mathcal{O}(\log N)$ nodes plus a constant number of triangles per leaf; the
+$best$ clamp trims further. The worst case (a ray grazing many overlapping boxes,
+or a degenerate tree) is $\mathcal{O}(N)$, rare with a SAH BVH.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+Operation & Average & Worst case \\
+\midrule
+Construction & $\mathcal{O}(N \log N)$ & $\mathcal{O}(N^2)$ (bounded by MAX\_DEPTH) \\
+Memory & $\mathcal{O}(N)$ & $\mathcal{O}(N)$ \\
+Nearest hit / shadow & $\mathcal{O}(\log N)$ & $\mathcal{O}(N)$ \\
+Frame ($P$ pixels) & $\mathcal{O}(P \log N)$ & $\mathcal{O}(P\,N)$ \\
+\bottomrule
+\end{tabular}
+\caption{Cost of each operation.}
+\end{table}
+
+% ===========================================================================
+\section{Correctness}
+
+\begin{lemma}[Partition]
+The leaves form a partition of the triangles: each one is in exactly one leaf.
+\end{lemma}
+\noindent
+\textsc{Partition} returns $mid$ with $[start,mid)$ and $[mid,start+count)$
+disjoint and covering the range; the recursion descends into those subranges and
+the base case assigns a full range to a leaf. By induction the leaves' ranges are
+disjoint and cover $[0,N)$. Since $count$ strictly decreases (or is cut by
+\texttt{MAX\_DEPTH}), the recursion \textbf{terminates}.
+
+\begin{lemma}[Sound pruning]\label{lem:prune}
+If the ray misses \texttt{n.bounds}, it misses every triangle in $n$'s subtree.
+\end{lemma}
+\noindent
+Immediate from Invariant~\ref{inv:bound}.
+
+\begin{theorem}[Correctness of \textsc{Intersect}]
+It returns the triangle of smallest $t>0$ along the ray, the same as testing all
+$N$.
+\end{theorem}
+\noindent
+A node is discarded only if (i) the ray misses its box (Lemma~\ref{lem:prune}), or
+(ii) it is hit at distance $\ge best$, in which case by Invariant~\ref{inv:bound}
+every triangle in the subtree has $t \ge best$ and cannot improve the optimum.
+Every node not discarded is visited, and at each leaf all its triangles are tested,
+so the final $best$ is the global minimum. Each node is pushed once over a finite
+tree, hence it \textbf{terminates}. \textsc{Occluded} uses the same pruning with
+the weaker condition ``some $t < t_{\text{light}}$''.
+
+% ===========================================================================
+\section{Integration in the ray tracer}
+
+On top of the BVH: a \textbf{static} hierarchy for the room (built once) and a
+\textbf{dynamic} one rebuilt per frame for the animated shapes; each ray queries
+both. Shadows via \textsc{Occluded}, recursive Whitted-style reflections
+($\text{color} = \text{local}(1-k) + \text{reflected}\cdot k$), ambient lighting
+from a \emph{cubemap} (skybox) sampled along the normal, and parallelism by
+splitting pixels across threads (BVH queries are read-only).
+
+% ===========================================================================
+\section{Results}
+
+\begin{figure}[h]
+  \centering
+  \fbox{\parbox[c][4cm][c]{0.46\textwidth}{\centering FIGURE: rasterized
+  (docs/img/raster.png)}}
+  \hfill
+  \fbox{\parbox[c][4cm][c]{0.46\textwidth}{\centering FIGURE: raytrace + BVH
+  (docs/img/raytrace.png)}}
+  \caption{Same scene rasterized and ray traced over the BVH.}
+\end{figure}
+
+\noindent
+\emph{(Fill in your numbers: $N$, FPS with and without the BVH, thread count, build
+time, measured tree height versus $\log_2 N$, nodes visited per ray.)}
+
+% ===========================================================================
+\begin{thebibliography}{9}
+
+\bibitem{goldsmith}
+J. Goldsmith, J. Salmon.
+\emph{Automatic Creation of Object Hierarchies for Ray Tracing}.
+IEEE Computer Graphics and Applications, 7(5), 1987.
+
+\bibitem{macdonald}
+D. J. MacDonald, K. S. Booth.
+\emph{Heuristics for Ray Tracing Using Space Subdivision}.
+The Visual Computer, 6(3), 1990.
+
+\bibitem{wald}
+I. Wald.
+\emph{On Fast Construction of SAH-based Bounding Volume Hierarchies}.
+IEEE Symposium on Interactive Ray Tracing, 2007.
+
+\bibitem{moller}
+T. M\"oller, B. Trumbore.
+\emph{Fast, Minimum Storage Ray/Triangle Intersection}.
+Journal of Graphics Tools, 2(1), 1997.
+
+\bibitem{williams}
+A. Williams, S. Barrs, R. K. Morley, P. Shirley.
+\emph{An Efficient and Robust Ray-Box Intersection Algorithm}.
+Journal of Graphics Tools, 2005.
+
+\bibitem{pbrt}
+M. Pharr, W. Jakob, G. Humphreys.
+\emph{Physically Based Rendering: From Theory to Implementation} (4th ed.).
+MIT Press, 2023. Chapter 4.
+
+\end{thebibliography}
+
+\end{document}
