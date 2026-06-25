@@ -63,7 +63,7 @@ struct Game
     int   max_bounces = 1;      // ray recursion depth
 
     // --- "alive city" extras ---
-    struct Ped { vec3 pos; vec3 shirt; float phase; };
+    struct Ped { vec3 pos; vec3 shirt; float phase; float speed; };
     std::vector<Ped> peds;      // animated pedestrians (dynamic BVH)
     float bob_phase = 0.0f;     // first-person walk head-bob accumulator
     bool  fly_mode = false;     // walk (ground) vs free-fly (double-tap SPACE)
@@ -162,7 +162,7 @@ void build_scene_tris(Game* e) {
     // Animated pedestrians (regenerated each frame with the current walk phase).
     const vec3 skin(0.85f, 0.70f, 0.55f);
     for (const auto& p : e->peds) {
-        float phase = e->time * 4.0f + p.phase;
+        float phase = p.phase;   // advanced in game_update, proportional to speed
         add_humanoid(e->rt_tris, p.pos, skin, p.shirt, phase);
     }
 
@@ -880,25 +880,6 @@ void game_init(Game *e)
     e->reflectivity_map["FLOOR"] = 0.2f; // Example reflectivity for the floor
 
 
-    // ===================== Objetos animados ======================
-    // Esfera que orbita (se mueve en game_update).
-    mesh* orbiter = new mesh;
-    create_sphere(orbiter, 0.4f, 8, 12);
-    e->meshes["ORBITER"] = orbiter;
-    e->reflectivity_map["ORBITER"] = 0.6f;
-
-    // Cubo que "late" (cambia de tamaño en game_update).
-    mesh* pulse = new mesh;
-    create_cube(pulse, 1.0f);
-    e->meshes["PULSER"] = pulse;
-    e->reflectivity_map["PULSER"] = 0.1f;
-
-    // Cilindro que rebota verticalmente.
-    mesh* bouncer = new mesh;
-    create_cylinder(bouncer, 0.35f, 0.8f, 16);
-    e->meshes["BOUNCER"] = bouncer;
-    e->reflectivity_map["BOUNCER"] = 0.2f;
-
     // Pedestrians strolling along the N-S avenue sidewalks.
     {
         const float cell = CITY_SPAN / city_grid(e->density);
@@ -913,6 +894,9 @@ void game_init(Game *e)
             p.pos   = vec3(side, 0.0f, z);
             p.shirt = hsv_to_rgb(ur(), 0.65f, 0.8f);
             p.phase = ur() * 6.283f;
+            // velocidad: alterna direccion (unos van al norte, otros al sur)
+            float dir = (i & 1) ? +1.0f : -1.0f;
+            p.speed = dir * (0.6f + ur() * 0.6f);
             e->peds.push_back(p);
         }
     }
@@ -987,24 +971,17 @@ void game_update(Game *e, float dt)
 
     // ===================== Animación de la escena =====================
     e->time += dt;
-    float t = e->time;
 
-    // Esfera orbitando alrededor del origen en el plano XZ.
-    float orbit_r = 2.5f;
-    e->meshes["ORBITER"]->setPosition(vec3(
-        std::cos(t) * orbit_r,
-        0.6f + 0.3f * std::sin(t * 2.0f),  // pequeño sube-baja
-        std::sin(t) * orbit_r));
-
-    // Cubo que late: escala oscilando entre ~0.5 y ~1.5.
-    float pulse = 1.0f + 0.5f * std::sin(t * 3.0f);
-    e->meshes["PULSER"]->setScale(vec3(pulse, pulse, pulse));
-    e->meshes["PULSER"]->setPosition(vec3(-1.5f, 2.5f, -2.0f));
-    e->meshes["PULSER"]->updateRotation(vec3(0.0f, dt * 1.5f, 0.0f)); // gira en Y
-
-    // Cilindro que rebota verticalmente (valor absoluto del seno = rebote).
-    float bounce = 0.4f + std::fabs(std::sin(t * 2.5f)) * 1.8f;
-    e->meshes["BOUNCER"]->setPosition(vec3(2.5f, bounce, 2.5f));
+    // Peatones: avanzan a lo largo de la avenida (eje Z) y reaparecen por el
+    // extremo opuesto al salir. El paso (balanceo de piernas/brazos) lo aporta
+    // la fase en add_humanoid, así que aquí solo movemos su posición.
+    const float lim = CITY_SPAN * 0.5f - 1.0f;
+    for (auto& p : e->peds) {
+        p.pos.z -= p.speed * dt;
+        p.phase += std::fabs(p.speed) * dt * 4.0f;   // stride cadence matches speed
+        if      (p.pos.z < -lim) p.pos.z =  lim;   // wrap al otro extremo
+        else if (p.pos.z >  lim) p.pos.z = -lim;
+    }
 }
 
 
