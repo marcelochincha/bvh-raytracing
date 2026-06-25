@@ -18,8 +18,9 @@
 *.swp
 *~
 
-# Heavy assets (not versioned): put room scans / models here
-/res/models/
+# Heavy assets (not versioned): put big room scans / models here
+/res/models/*.ply
+/res/models/*.bin
 
 # Reports (generated)
 *.aux

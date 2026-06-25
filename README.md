@@ -74,15 +74,25 @@ cmake --build build -j
 - `TAB` — alternar rasterizador / ray tracer
 - `B` — alternar BVH (rápido) vs fuerza bruta `O(N)` (lento)
 - `V` — superponer las cajas del BVH (debug)
-- `WASD` + ratón — cámara
+- `M` — **menú de opciones** (escena ciudad/esferas, densidad, reflejos, nº de rebotes, etc.); navega con ↑/↓ y cambia con ←/→
+- `WASD` + ratón — cámara/caminar · `ESPACIO`/`SHIFT` subir/bajar (en vuelo) · **doble `ESPACIO`** alterna caminar ↔ volar · `ESC` salir
+
+## Cargar modelos OBJ
+
+El proyecto incluye un cargador de Wavefront `.obj` con **sombreado suave**
+(normales por vértice interpoladas). Deja tus modelos en `res/models/` y cárgalos
+con `load_obj("res/models/tu_modelo.obj", base, escala, albedo, reflectividad, tris)`
+(ver el uso en `build_city`, donde se carga `sculpture.obj` — un toro— como pieza
+central). Las superficies curvas (esferas, modelos) ya no se ven facetadas.
 
 ## Roadmap
 
+- [x] Escenas procedurales (ciudad de edificios + campo de esferas) con densidad configurable
+- [x] Menú de opciones en pantalla (`[M]`)
 - [ ] Heurísticas de construcción adicionales (median split, Morton/LBVH)
 - [ ] Referencia externa con Intel Embree
 - [ ] Instrumentación de métricas (build/render, nodos visitados/rayo, memoria)
 - [ ] Mejor visualización (slider de profundidad, ruta de un rayo de debug)
-- [ ] Escenas más ricas (modelos estándar + generador procedural para escalado)
 
 ## Autores
 

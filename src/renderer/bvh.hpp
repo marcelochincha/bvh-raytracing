@@ -28,9 +28,15 @@ namespace bvh {
 // A shadeable triangle: geometry the BVH needs + payload the shader needs.
 struct Tri {
     vec3  v0, v1, v2;
-    vec3  normal;        // precomputed, normalized
+    vec3  normal;        // face normal (used unless `smooth`)
     vec3  albedo;        // [0,1]
     float reflectivity;  // [0,1]
+    // Per-vertex normals for smooth (Gouraud/Phong) shading. Flat geometry
+    // leaves these zeroed + smooth=false and shades with `normal` (cheap);
+    // smooth meshes (spheres, loaded OBJ) set smooth=true so the shader
+    // interpolates n0/n1/n2 across the triangle.
+    bool  smooth = false;
+    vec3  n0, n1, n2;
 };
 
 // Result of the nearest-hit query.
