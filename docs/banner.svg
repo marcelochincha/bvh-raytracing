@@ -36,6 +36,6 @@
     </text>
 
     <text x="640" y="262" fill="#e6e6e6" font-size="20" font-weight="600">Kalos Lazo  &#183;  Lenin Chavez  &#183;  Marcelo Chincha</text>
-    <text x="640" y="294" fill="#8b93a7" font-size="15" font-style="italic">Prof. Luciano Romero</text>
+    <text x="640" y="294" fill="#8b93a7" font-size="15">Prof. Luciano Romero</text>
   </g>
 </svg>
