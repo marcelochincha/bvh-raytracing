@@ -12,5 +12,6 @@ void game_handle_events(Game* e, SDL_Event& event, bool& running);
 void game_render(Game* e, SDL_Texture* sdl_fb_texture, float dt);
 void game_shutdown(Game* e);
 void run_benchmark(Game* e);   // [F1]/--bench: sweep strategies x densities -> CSV
+void run_demo(Game* e, SDL_Texture* tex); // --demo: cinematic capture -> docs/demo_*.bmp
 
 //#define DEBUG_CAMERA

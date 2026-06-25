@@ -28,3 +28,6 @@
 *.out
 *.toc
 *.pdf
+
+# Demo capture intermediates (the .mp4 is kept)
+docs/demo_*.bmp

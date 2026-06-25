@@ -58,6 +58,17 @@ int main(int argc, char *argv[])
         return 0;
     }
 
+    // --demo: render the cinematic to docs/demo_XXXX.bmp (encode to mp4 after).
+    if (global_config.demo) {
+        run_demo(game, sdl_fb_texture);
+        game_shutdown(game);
+        SDL_DestroyTexture(sdl_fb_texture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 0;
+    }
+
     bool running = true;
     const float DT = 1.0f / 60.0f;
     float deltaTimeSeconds = DT;

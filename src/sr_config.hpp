@@ -18,6 +18,7 @@ struct config
     int audio_rate;
     bool debug_mode;
     bool bench;
+    bool demo;
 
     config()
         : window_width(W_WIDTH),
@@ -25,7 +26,8 @@ struct config
           target_fps(TARGET_FPS),
           audio_rate(AUDIO_RATE),
           debug_mode(DEBUG),
-          bench(false)
+          bench(false),
+          demo(false)
     {
     }
 };
@@ -71,6 +73,10 @@ inline config parse_args(int argc, char* argv[])
         else if (strcmp(argv[i], "--bench") == 0)
         {
             cfg.bench = true;
+        }
+        else if (strcmp(argv[i], "--demo") == 0)
+        {
+            cfg.demo = true;
         }
         else if (strcmp(argv[i], "--help") == 0)
         {

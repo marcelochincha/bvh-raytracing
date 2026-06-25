@@ -66,6 +66,7 @@ struct Game
     struct Ped { vec3 pos; vec3 shirt; float phase; float speed; };
     std::vector<Ped> peds;      // animated pedestrians (dynamic BVH)
     float bob_phase = 0.0f;     // first-person walk head-bob accumulator
+    bool  show_hud = true;      // draw the on-screen stats overlay
     bool  fly_mode = false;     // walk (ground) vs free-fly (double-tap SPACE)
     Uint32 last_space_ms = 0;   // for double-tap detection
 
@@ -1296,6 +1297,85 @@ void run_benchmark(Game* e) {
 }
 
 
+// ===================== Demo video capture =====================
+// Writes the framebuffer to a 24-bit BMP (no dependencies, ffmpeg-friendly).
+static void save_frame_bmp(const framebuffer& fb, const char* path) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return;
+    int W = fb.width, H = fb.height;
+    int rowSize = (W * 3 + 3) & ~3;          // rows padded to 4 bytes
+    int imgSize = rowSize * H;
+    unsigned char hdr[54] = {};
+    hdr[0] = 'B'; hdr[1] = 'M';
+    *(int*)(hdr + 2)  = 54 + imgSize;
+    *(int*)(hdr + 10) = 54;
+    *(int*)(hdr + 14) = 40;
+    *(int*)(hdr + 18) = W;
+    *(int*)(hdr + 22) = H;
+    *(short*)(hdr + 26) = 1;
+    *(short*)(hdr + 28) = 24;
+    *(int*)(hdr + 34) = imgSize;
+    *(int*)(hdr + 38) = 2835; *(int*)(hdr + 42) = 2835;
+    f.write((char*)hdr, 54);
+    std::vector<unsigned char> row(rowSize, 0);
+    for (int y = H - 1; y >= 0; --y) {        // BMP is bottom-up
+        for (int x = 0; x < W; ++x) {
+            uint32_t p = fb.colorBuffer[y * W + x];   // 0xAARRGGBB
+            row[x * 3 + 0] = (unsigned char)(p);         // B
+            row[x * 3 + 1] = (unsigned char)(p >> 8);    // G
+            row[x * 3 + 2] = (unsigned char)(p >> 16);   // R
+        }
+        f.write((char*)row.data(), rowSize);
+    }
+}
+
+static float demo_smooth(float a, float b, float x) {
+    float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Scripted cinematic camera: descend from an aerial view to street level while
+// travelling up the main avenue, then level out among the pedestrians.
+static void demo_camera(Game* e, float t) {
+    float s = demo_smooth(0.15f, 0.65f, t);
+    e->position = vec3(3.0f * std::sin(t * 3.14f),
+                       20.0f - 17.0f * s,
+                       22.0f - 44.0f * t);
+    e->yaw   = 0.10f * std::sin(t * 3.14f);
+    e->pitch = to_radians(-25.0f + 22.0f * s);
+    e->cam.setPosition(e->position);
+    e->cam.setRotation(vec3(e->pitch, e->yaw, 0.0f));
+}
+
+// Render N frames of the cinematic to docs/demo_NNNN.bmp (encode later with
+// ffmpeg) so the project ships with a reproducible demo video, not a manual
+// screen recording.
+void run_demo(Game* e, SDL_Texture* tex) {
+    e->raytrace_mode = true;
+    e->use_bvh = true;
+    e->fly_mode = true;
+    e->show_hud = false;
+    const int   N   = 240;
+    const float fps = 24.0f;
+    bool running = true;
+    for (int i = 0; i < N && running; ++i) {
+        float t = (float)i / (N - 1);
+        demo_camera(e, t);
+        e->show_bvh = (t > 0.60f && t < 0.78f);   // briefly reveal the BVH
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) if (ev.type == SDL_QUIT) running = false;
+        game_render(e, tex, 1.0f / fps);
+        char path[64];
+        snprintf(path, sizeof(path), "docs/demo_%04d.bmp", i);
+        save_frame_bmp(e->fb, path);
+    }
+    e->show_hud = true;
+    std::cout << "\nDemo: " << N << " frames -> docs/demo_XXXX.bmp\n"
+              << "Encode: ffmpeg -y -framerate " << (int)fps
+              << " -i docs/demo_%04d.bmp -vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\""
+              << " -c:v libx264 -pix_fmt yuv420p docs/demo.mp4\n\n";
+}
+
 void game_render(Game *e, SDL_Texture *sdl_fb_texture, float dt)
 {
     uint64_t t = SDL_GetPerformanceCounter();
@@ -1410,8 +1490,10 @@ void game_render(Game *e, SDL_Texture *sdl_fb_texture, float dt)
         nodes_per_ray, e->field_build_ms,
         Game::NUM_WORKERS,
         e->fly_mode ? "FLY" : "WALK");
-    draw_text(e->fb, 22, 22, HUD, 0x88000000, 0x88000000);
-    draw_text(e->fb, 20, 20, HUD, 0xFFFFFFFF);
+    if (e->show_hud) {
+        draw_text(e->fb, 22, 22, HUD, 0x88000000, 0x88000000);
+        draw_text(e->fb, 20, 20, HUD, 0xFFFFFFFF);
+    }
 
     if (e->show_menu) draw_menu(e); // always on top, last
 
