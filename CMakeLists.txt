@@ -35,6 +35,22 @@ else()
     target_link_libraries(${PROJECT_NAME} PRIVATE ${SDL2_LIBRARIES})
 endif()
 
+# ---- Intel Embree (optional, external reference for the study) ----------------
+# When present it is linked in and WITH_EMBREE is defined so the benchmark adds
+# an "Embree" row. When absent the project still builds; the benchmark just skips
+# that row. (macOS: `brew install embree`.)
+option(WITH_EMBREE "Use Intel Embree as an external reference" ON)
+if(WITH_EMBREE)
+    find_package(embree 4 QUIET)
+    if(TARGET embree)
+        message(STATUS "Embree ${embree_VERSION} found -> WITH_EMBREE enabled")
+        target_compile_definitions(${PROJECT_NAME} PRIVATE WITH_EMBREE)
+        target_link_libraries(${PROJECT_NAME} PRIVATE embree)
+    else()
+        message(STATUS "Embree NOT found -> building without it (benchmark will skip the Embree row)")
+    endif()
+endif()
+
 # ---- Tune for the host CPU (NEON on Apple Silicon, AVX on x86) ----------------
 target_compile_options(${PROJECT_NAME} PRIVATE -march=native)
 

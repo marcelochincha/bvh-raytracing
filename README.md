@@ -43,16 +43,33 @@ docs/                           # informe (LaTeX)
 
 ## Dependencias
 
-- **SDL2** (única dependencia). Opcionalmente `SDL2_mixer` si se reactiva el
+- **SDL2** (única dependencia obligatoria). Opcionalmente `SDL2_mixer` si se reactiva el
   sonido (desactivado en este repo).
+- **Intel Embree 4** (opcional) — referencia externa del estudio. Si está instalado,
+  se detecta solo y el benchmark añade una fila "Embree".
 
 Instalación:
 
 | Plataforma | Comando |
 |---|---|
-| macOS (Homebrew) | `brew install sdl2` |
-| Windows | descargar las *development libraries* de SDL2 (MSVC o MinGW) |
-| Linux (Debian/Ubuntu) | `sudo apt install libsdl2-dev` |
+| macOS (Homebrew) | `brew install sdl2 embree` |
+| Windows | SDL2 dev libs + Embree (binarios oficiales) |
+| Linux (Debian/Ubuntu) | `sudo apt install libsdl2-dev libembree-dev` |
+
+## Estudio comparativo (benchmark)
+
+Compara las estrategias de construcción del BVH y la referencia Embree sobre la
+misma geometría, midiendo tiempo de build, render, **traversal puro** y **nodos
+visitados por rayo**:
+
+```sh
+./build/bin/bvh_raytracer --bench          # genera docs/benchmark.csv
+python3 docs/plot.py                       # genera las figuras docs/*.png
+```
+
+Resultado (resumen): SAH da el árbol de mejor calidad (menos nodos/ray); Morton
+construye más rápido pero da el peor árbol; los kernels SIMD de Embree recorren
+~3× más rápido que nuestra mejor SAH sobre los mismos triángulos.
 
 ## Cómo compilar y ejecutar
 
@@ -87,12 +104,14 @@ central). Las superficies curvas (esferas, modelos) ya no se ven facetadas.
 
 ## Roadmap
 
-- [x] Escenas procedurales (ciudad de edificios + campo de esferas) con densidad configurable
+- [x] Escenas procedurales (ciudad + esferas) con densidad configurable
 - [x] Menú de opciones en pantalla (`[M]`)
-- [ ] Heurísticas de construcción adicionales (median split, Morton/LBVH)
-- [ ] Referencia externa con Intel Embree
-- [ ] Instrumentación de métricas (build/render, nodos visitados/rayo, memoria)
-- [ ] Mejor visualización (slider de profundidad, ruta de un rayo de debug)
+- [x] Heurísticas de construcción (SAH / Median / Morton) seleccionables
+- [x] Métricas + benchmark reproducible + gráficas comparativas
+- [x] Referencia externa Intel Embree (opcional)
+- [x] Sombreado suave + cargador OBJ
+- [ ] Visualización de la ruta de un rayo por el árbol (demo)
+- [ ] Reporte LaTeX + presentación + video
 
 ## Autores
 

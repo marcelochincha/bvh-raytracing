@@ -54,13 +54,32 @@ fig.tight_layout(); fig.savefig(os.path.join(HERE, "fig_quality.png"), dpi=140);
 # ---- Figure 3: scaling — render time vs triangle count ----------------------
 fig, ax = plt.subplots(figsize=(7,4))
 for s in STRAT:
-    pts = sorted([(r["tris"], r["render_ms"]) for r in rows if r["strategy"]==s])
+    pts = sorted([(r["tris"], r["render_ms"]) for r in rows if r["strategy"]==s and r["render_ms"]>0])
     xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
     ax.plot(xs, ys, "-o", color=COLOR[s], label=s)
 ax.set_xlabel("Numero de triangulos")
-ax.set_ylabel("Tiempo de render (ms)")
+ax.set_ylabel("Tiempo de render (ms, multihilo)")
 ax.set_title("Escalado: tiempo de render vs tamanio de la escena")
 ax.grid(alpha=0.3); ax.legend()
 fig.tight_layout(); fig.savefig(os.path.join(HERE, "fig_scaling.png"), dpi=140); plt.close(fig)
 
-print("wrote: fig_tradeoff.png, fig_quality.png, fig_scaling.png in", HERE)
+# ---- Figure 4: traversal cost vs Intel Embree (Medium density) ---------------
+# Pure single-threaded intersection of all primary rays -> apples-to-apples
+# against Embree's kernels on the same geometry.
+import numpy as np
+fig, ax = plt.subplots(figsize=(7,4))
+vals, labs, cols = [], [], []
+for s in STRAT + ["Embree"]:
+    rs = [r["traversal_ms"] for r in rows if r["strategy"]==s and r["density"]=="Medium"]
+    if not rs: continue
+    vals.append(rs[0]); labs.append(s)
+    cols.append(COLOR.get(s, "#264653"))
+ax.bar(labs, vals, color=cols)
+for i, v in enumerate(vals):
+    ax.text(i, v, f"{v:.1f}", ha="center", va="bottom", fontweight="bold")
+ax.set_ylabel("Traversal (ms) — menos es mejor")
+ax.set_title("Costo de traversal vs Intel Embree (escena Medium, mismo geometry)")
+ax.grid(axis="y", alpha=0.3)
+fig.tight_layout(); fig.savefig(os.path.join(HERE, "fig_embree.png"), dpi=140); plt.close(fig)
+
+print("wrote: fig_tradeoff.png, fig_quality.png, fig_scaling.png, fig_embree.png in", HERE)

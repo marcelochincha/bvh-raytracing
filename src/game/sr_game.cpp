@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <renderer/sr_renderer.hpp>
 #include <renderer/bvh.hpp>
+#include <renderer/embree_bvh.hpp>   // optional (no-op unless WITH_EMBREE)
 #include <algorithm>
 #include <string>
 #include <cmath>
@@ -1208,18 +1209,37 @@ static FrameMeas bench_frame(Game* e) {
     return { ms, nodes };
 }
 
+// Pure intersection of every primary ray against field_bvh, single-threaded and
+// with no shading. This isolates the acceleration-structure cost so it is
+// directly comparable to Embree's rtcIntersect1 (which also shades nothing here).
+static double traversal_only(Game* e) {
+    e->cam.rotation();
+    const camera& cam = e->cam;
+    int W = e->fb.width, H = e->fb.height;
+    uint64_t t0 = SDL_GetPerformanceCounter();
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            vec3 dir = get_ray_direction(cam, x, y, W, H);
+            bvh::Hit h;
+            e->field_bvh.intersect(cam._position, dir, h);
+        }
+    return (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
+}
+
 void run_benchmark(Game* e) {
     e->raytrace_mode = true;
     e->use_bvh = true;
     const char* sn[] = { "SAH", "Median", "Morton" };
     const char* dn[] = { "Small", "Medium", "Large" };
-    const int   WARMUP = 3, MEASURE = 10;
+    const int   WARMUP = 3, MEASURE = 10, TRAV = 5;
 
     std::ofstream csv("docs/benchmark.csv");
-    csv << "strategy,density,tris,node_count,build_ms,render_ms,nodes_per_ray\n";
+    csv << "strategy,density,tris,node_count,build_ms,render_ms,traversal_ms,nodes_per_ray\n";
 
     std::cout << "\n=========== BENCHMARK (warmup " << WARMUP << " + avg "
               << MEASURE << " frames) ===========\n";
+
+    // --- Our build strategies (SAH / Median / Morton) ---
     for (int s = 0; s < 3; ++s)
         for (int d = 0; d < 3; ++d) {
             e->build_strategy = (bvh::BuildStrategy)s;
@@ -1236,17 +1256,65 @@ void run_benchmark(Game* e) {
             double ravg = rsum / MEASURE;
             long   rays = (long)e->fb.width * e->fb.height;
             double npr  = rays > 0 ? (double)nsum / MEASURE / rays : 0.0;
+            // pure single-threaded traversal (comparable to Embree)
+            double trav = 0; for (int i = 0; i < TRAV; ++i) trav += traversal_only(e);
+            trav /= TRAV;
+
             size_t tris = e->field_bvh.triangle_count();
             size_t nn   = e->field_bvh.node_count();
-
             std::cout << sn[s] << "\t" << dn[d]
                       << "\ttris=" << tris << "\tnodes=" << nn
                       << "\tbuild=" << e->field_build_ms << "ms"
                       << "\trender=" << ravg << "ms"
+                      << "\ttrav=" << trav << "ms"
                       << "\tn/ray=" << npr << "\n";
             csv << sn[s] << "," << dn[d] << "," << tris << "," << nn << ","
-                << e->field_build_ms << "," << ravg << "," << npr << "\n";
+                << e->field_build_ms << "," << ravg << "," << trav << "," << npr << "\n";
         }
+
+#ifdef WITH_EMBREE
+    // --- Intel Embree (external reference) on the SAME geometry ---
+    std::cout << "--- Embree (external reference) ---\n";
+    e->cam.rotation();
+    const camera& cam = e->cam;
+    int W = e->fb.width, H = e->fb.height;
+    for (int d = 0; d < 3; ++d) {
+        e->density = d;
+        e->build_strategy = bvh::SAH;
+        rebuild_field(e);
+
+        std::vector<bvh::Tri> tris(e->field_bvh.triangle_count());
+        for (size_t i = 0; i < tris.size(); ++i) tris[i] = e->field_bvh.tri(i);
+
+        embree_ref::Scene esc;
+        uint64_t tb = SDL_GetPerformanceCounter();
+        esc.build(tris);
+        double ebuild = (SDL_GetPerformanceCounter() - tb) * 1000.0 / SDL_GetPerformanceFrequency();
+
+        auto embree_traverse = [&]() {
+            uint64_t t0 = SDL_GetPerformanceCounter();
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x) {
+                    vec3 dir = get_ray_direction(cam, x, y, W, H);
+                    float t; esc.intersect(cam._position, dir, t);
+                }
+            return (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
+        };
+        for (int i = 0; i < WARMUP; ++i) embree_traverse();
+        double etrav = 0; for (int i = 0; i < TRAV; ++i) etrav += embree_traverse();
+        etrav /= TRAV;
+
+        std::cout << "Embree\t" << dn[d]
+                  << "\ttris=" << tris.size()
+                  << "\tbuild=" << ebuild << "ms"
+                  << "\ttrav=" << etrav << "ms\n";
+        csv << "Embree," << dn[d] << "," << tris.size() << ",0,"
+            << ebuild << ",0," << etrav << ",0\n";
+    }
+#else
+    std::cout << "(build without WITH_EMBREE -> Embree row skipped)\n";
+#endif
+
     std::cout << "=========== done -> docs/benchmark.csv ===========\n\n";
 }
 
