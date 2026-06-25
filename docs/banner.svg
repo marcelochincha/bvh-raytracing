@@ -1,68 +1,55 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" font-family="Segoe UI, Helvetica, Arial, sans-serif">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0"    stop-color="#0b1020"/>
       <stop offset="0.55" stop-color="#141a2e"/>
       <stop offset="1"    stop-color="#1d1335"/>
     </linearGradient>
-    <linearGradient id="raygrad" x1="0" y1="1" x2="1" y2="0">
-      <stop offset="0" stop-color="#FF8C42"/>
-      <stop offset="1" stop-color="#ff6b9d"/>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0"   stop-color="#61afef"/>
+      <stop offset="0.5" stop-color="#c678dd"/>
+      <stop offset="1"   stop-color="#ff6b9d"/>
     </linearGradient>
-    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
-      <stop offset="0"   stop-color="#61afef" stop-opacity="0.20"/>
-      <stop offset="1"   stop-color="#61afef" stop-opacity="0"/>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#61afef"/>
+      <stop offset="1" stop-color="#c678dd"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="42%" r="42%">
+      <stop offset="0" stop-color="#61afef" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#61afef" stop-opacity="0"/>
     </radialGradient>
+    <pattern id="dots" width="34" height="34" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.3" fill="#3a4360" opacity="0.45"/>
+    </pattern>
   </defs>
 
-  <rect width="1280" height="340" fill="url(#bg)"/>
+  <!-- background -->
+  <rect width="1280" height="420" fill="url(#bg)"/>
+  <rect width="1280" height="420" fill="url(#dots)"/>
+  <rect width="1280" height="420" fill="url(#glow)"/>
 
-  <!-- faint dot grid -->
-  <g fill="#3b4256" opacity="0.35">
-    <!-- generated dots -->
-    <g>
-      <!-- rows -->
-      <g>
-        <circle cx="40"  cy="40"  r="1.5"/><circle cx="120" cy="40"  r="1.5"/><circle cx="200" cy="40"  r="1.5"/><circle cx="280" cy="40"  r="1.5"/><circle cx="360" cy="40"  r="1.5"/><circle cx="440" cy="40"  r="1.5"/><circle cx="520" cy="40"  r="1.5"/><circle cx="600" cy="40"  r="1.5"/><circle cx="680" cy="40"  r="1.5"/><circle cx="760" cy="40"  r="1.5"/><circle cx="840" cy="40"  r="1.5"/><circle cx="920" cy="40"  r="1.5"/><circle cx="1000" cy="40" r="1.5"/><circle cx="1080" cy="40" r="1.5"/><circle cx="1160" cy="40" r="1.5"/><circle cx="1240" cy="40" r="1.5"/>
-      </g>
-    </g>
-  </g>
-
-  <!-- glow behind motif -->
-  <circle cx="1030" cy="170" r="180" fill="url(#halo)"/>
-
-  <!-- BVH nested-boxes motif (depth-colored, like the app's debug view) -->
-  <g fill="none" stroke-linejoin="round">
-    <!-- root -->
-    <rect x="870" y="74" width="330" height="196" rx="6" stroke="#61afef" stroke-width="2.5" opacity="0.95"/>
-    <!-- depth 1 -->
-    <rect x="870" y="74" width="166" height="196" rx="4" stroke="#e5c07b" stroke-width="2"   opacity="0.85"/>
-    <rect x="1036" y="74" width="164" height="196" rx="4" stroke="#e5c07b" stroke-width="2"   opacity="0.85"/>
-    <!-- depth 2 (leaves) -->
-    <rect x="870"  y="74"  width="166" height="100" rx="3" stroke="#98c379" stroke-width="1.8" opacity="0.8"/>
-    <rect x="870"  y="174" width="166" height="96"  rx="3" stroke="#98c379" stroke-width="1.8" opacity="0.8"/>
-    <rect x="1036" y="74"  width="164" height="100" rx="3" stroke="#c678dd" stroke-width="1.8" opacity="0.8"/>
-    <rect x="1036" y="174" width="164" height="96"  rx="3" stroke="#c678dd" stroke-width="1.8" opacity="0.8"/>
-  </g>
-  <!-- triangles inside leaves (the actual geometry) -->
-  <g fill="#56b6c2" opacity="0.55">
-    <polygon points="900,150 935,100 970,150"/>
-    <polygon points="900,250 935,200 970,250"/>
-    <polygon points="1070,250 1105,200 1140,250"/>
-  </g>
-
-  <!-- the ray, entering and hitting a leaf -->
+  <!-- emblem: a BVH partition (2x2 leaves, one hit) -->
   <g>
-    <line x1="760" y1="300" x2="1015" y2="135" stroke="url(#raygrad)" stroke-width="3" stroke-linecap="round"/>
-    <polygon points="1015,135 1000,150 1006,128" fill="#ff6b9d"/>
-    <circle cx="1015" cy="135" r="6" fill="#FF8C42" opacity="0.9"/>
+    <rect x="615" y="50" width="22" height="22" rx="4" fill="none" stroke="#61afef" stroke-width="1.8" opacity="0.55"/>
+    <rect x="643" y="50" width="22" height="22" rx="4" fill="url(#leaf)"/>
+    <rect x="615" y="78" width="22" height="22" rx="4" fill="none" stroke="#61afef" stroke-width="1.8" opacity="0.55"/>
+    <rect x="643" y="78" width="22" height="22" rx="4" fill="none" stroke="#61afef" stroke-width="1.8" opacity="0.55"/>
   </g>
 
-  <!-- text -->
-  <g>
-    <text x="70" y="130" fill="#e6e6e6" font-size="58" font-weight="700" letter-spacing="0.5">BVH Raytracer</text>
-    <text x="72" y="172" fill="#9aa4b2" font-size="22" font-weight="400">Estudio comparativo de estructuras de aceleración para trazado de rayos en CPU</text>
-    <text x="72" y="222" fill="#61afef" font-size="20" font-weight="600" letter-spacing="1">SAH &#183; Median &#183; Morton</text>
-    <text x="72" y="250" fill="#ff6b9d" font-size="20" font-weight="600" letter-spacing="1">vs Intel Embree</text>
+  <g text-anchor="middle">
+    <text x="640" y="132" fill="#61afef" font-size="15" font-weight="600" letter-spacing="4">CS3014 &#183; ESTRUCTURA DE DATOS AVANZADOS &#183; 2026-1</text>
+
+    <text x="640" y="190" fill="#f4f6fb" font-size="56" font-weight="700" letter-spacing="0.5">BVH Raytracer</text>
+
+    <text x="640" y="224" fill="#9aa4b2" font-size="20" font-weight="400">Estudio comparativo de estructuras de aceleraci&#243;n para trazado de rayos en CPU</text>
+
+    <line x1="430" y1="248" x2="850" y2="248" stroke="url(#accent)" stroke-width="2.2" stroke-linecap="round"/>
+
+    <text x="640" y="280" font-size="19" font-weight="600">
+      <tspan fill="#61afef">SAH</tspan><tspan fill="#8b93a7"> &#183; </tspan><tspan fill="#e5c07b">Median</tspan><tspan fill="#8b93a7"> &#183; </tspan><tspan fill="#c678dd">Morton</tspan><tspan fill="#5c6370">      vs      </tspan><tspan fill="#ff6b9d">Intel Embree</tspan>
+    </text>
+
+    <text x="640" y="324" fill="#e6e6e6" font-size="21" font-weight="600" letter-spacing="0.5">Kalos Lazo  &#183;  Lenin Chavez  &#183;  Marcelo Chincha</text>
+    <text x="640" y="356" fill="#8b93a7" font-size="16" font-style="italic">Prof. Luciano Romero</text>
   </g>
 </svg>
