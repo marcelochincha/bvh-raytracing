@@ -74,6 +74,8 @@ struct Game
 
     bvh::BVH bvh;            // acceleration structure, rebuilt each frame
     bool     use_bvh = true; // [B] toggles BVH vs brute-force triangle loop
+    bvh::BuildStrategy build_strategy = bvh::SAH; // how the trees are split
+    double field_build_ms = 0.0;   // last field BVH build time (strategy comparison)
 
     // The static room (PLY) gets its OWN BVH, built ONCE in game_init. It has
     // hundreds of thousands of triangles, so it must NOT go through the
@@ -167,7 +169,7 @@ void build_scene_tris(Game* e) {
     // so the tree must be rebuilt every frame. For a static scene you'd build
     // it once.) build() copies the triangles in, so rt_tris stays valid for
     // the brute-force comparison path.
-    e->bvh.build(e->rt_tris);
+    e->bvh.build(e->rt_tris, e->build_strategy);
 }
 
 
@@ -380,6 +382,7 @@ Game *game_create(int width, int height)
 struct thread_data {
     Game* game;
     int thread_id;
+    long visits = 0;   // BVH nodes this worker tested this frame (quality metric)
 };
 
 int worker_thread(void* data) {
@@ -392,6 +395,8 @@ int worker_thread(void* data) {
     while (true) {
         SDL_SemWait(e->start_sems[id]);     // wait for "render this frame"
         if (!e->workers_running) break;     // shutdown sentinel
+
+        bvh::reset_thread_node_visits();    // count nodes this worker tests
 
         // Divide the screen into horizontal stripes, one per worker.
         // The last worker absorbs the remainder rows (height % NUM_WORKERS).
@@ -408,6 +413,7 @@ int worker_thread(void* data) {
             }
         }
 
+        td->visits = bvh::take_thread_node_visits(); // stash for the main thread
         SDL_SemPost(e->done_sem);           // signal "stripe finished"
     }
     return 0;
@@ -567,7 +573,7 @@ static void build_field(Game* e)
     }
 
     rebuild_field_mesh(e, tris);
-    e->field_bvh.build(std::move(tris));
+    e->field_bvh.build(std::move(tris), e->build_strategy);
     std::cout << "Field: " << count << " spheres, "
               << e->field_bvh.triangle_count() << " tris, "
               << e->field_bvh.node_count() << " BVH nodes\n";
@@ -809,7 +815,7 @@ static void build_city(Game* e)
              vec3(0.96f, 0.78f, 0.35f), 0.45f, tris);                              // gold reflective torus
 
     rebuild_field_mesh(e, tris);
-    e->field_bvh.build(std::move(tris));
+    e->field_bvh.build(std::move(tris), e->build_strategy);
     std::cout << "City: " << grid << "x" << grid << " grid, " << built
               << " buildings, " << e->field_bvh.triangle_count() << " tris, "
               << e->field_bvh.node_count() << " BVH nodes\n";
@@ -819,8 +825,14 @@ static void build_city(Game* e)
 // (called from game_init and from the options menu when those change).
 static void rebuild_field(Game* e)
 {
+    uint64_t t0 = SDL_GetPerformanceCounter();
     if (e->scene_id == 0) build_city(e);
     else                  build_field(e);
+    e->field_build_ms = (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
+    std::cout << "  -> build " << (e->scene_id == 0 ? "city" : "field")
+              << " (" << (e->build_strategy == bvh::SAH ? "SAH"
+                       : e->build_strategy == bvh::Median ? "Median" : "Morton")
+              << "): " << e->field_build_ms << " ms\n";
 }
 
 // Build (or rebuild) the rasterizer-side mirror of the field: one mesh whose
@@ -1094,12 +1106,12 @@ static double tick_ms(uint64_t& since) {
 // A translucent on-screen panel ([M]) that exposes the render settings live,
 // navigated with Up/Down and changed with Left/Right (or Enter).
 
-static const int MENU_ITEMS = 7;
+static const int MENU_ITEMS = 8;
 
 static const char* menu_label(int i) {
     static const char* L[MENU_ITEMS] = {
         "Render mode", "Acceleration", "Show BVH", "Scene",
-        "Density", "Reflections", "Ray bounces"
+        "Density", "Reflections", "Ray bounces", "BVH build"
     };
     return L[i];
 }
@@ -1112,7 +1124,10 @@ static const char* menu_value(const Game* e, int i) {
         case 3: return e->scene_id == 0 ? "City"     : "Spheres";
         case 4: return e->density == 0  ? "Small"    : (e->density == 1 ? "Medium" : "Large");
         case 5: return e->reflections   ? "On"       : "Off";
-        default: { static char b[8]; snprintf(b, sizeof(b), "%d", e->max_bounces); return b; }
+        case 6: { static char b[8]; snprintf(b, sizeof(b), "%d", e->max_bounces); return b; }
+        default:
+            return e->build_strategy == bvh::SAH    ? "SAH"
+                 : e->build_strategy == bvh::Median ? "Median" : "Morton";
     }
 }
 
@@ -1126,6 +1141,13 @@ static void menu_apply(Game* e, int dir) {
         case 4: e->density = (e->density + (dir < 0 ? 2 : 1)) % 3; rebuild_field(e); break;
         case 5: e->reflections   = !e->reflections;   break;
         case 6: e->max_bounces = 1 + ((e->max_bounces - 1 + (dir < 0 ? 2 : 1)) % 3); break;
+        case 7: { // cycle SAH -> Median -> Morton -> SAH, then rebuild
+            int s = (int)e->build_strategy;
+            s = (s + (dir < 0 ? 2 : 1)) % 3;
+            e->build_strategy = (bvh::BuildStrategy)s;
+            rebuild_field(e);
+            break;
+        }
     }
 }
 
@@ -1166,12 +1188,77 @@ static void draw_menu(Game* e) {
     draw_text(e->fb, x + 10, y0 + h - 16, "^/v select   </>  change", 0xFFA8B0BC);
 }
 
+// ===================== Benchmark (experiment harness) =====================
+// Sweeps every build strategy x density, renders a fixed number of frames for
+// each, and records build time, node count, traversal nodes/ray and render ms.
+// Prints a table to stdout and writes docs/benchmark.csv for the report. Bind to
+// a key (F1) -> the data for the comparison tables/graphs.
+
+struct FrameMeas { double render_ms; long nodes; };
+
+static FrameMeas bench_frame(Game* e) {
+    build_scene_tris(e);
+    e->cam.rotation();
+    uint64_t t0 = SDL_GetPerformanceCounter();
+    for (int i = 0; i < Game::NUM_WORKERS; ++i) SDL_SemPost(e->start_sems[i]);
+    for (int i = 0; i < Game::NUM_WORKERS; ++i) SDL_SemWait(e->done_sem);
+    long nodes = 0;
+    for (int i = 0; i < Game::NUM_WORKERS; ++i) nodes += e->worker_args[i].visits;
+    double ms = (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
+    return { ms, nodes };
+}
+
+void run_benchmark(Game* e) {
+    e->raytrace_mode = true;
+    e->use_bvh = true;
+    const char* sn[] = { "SAH", "Median", "Morton" };
+    const char* dn[] = { "Small", "Medium", "Large" };
+    const int   WARMUP = 3, MEASURE = 10;
+
+    std::ofstream csv("docs/benchmark.csv");
+    csv << "strategy,density,tris,node_count,build_ms,render_ms,nodes_per_ray\n";
+
+    std::cout << "\n=========== BENCHMARK (warmup " << WARMUP << " + avg "
+              << MEASURE << " frames) ===========\n";
+    for (int s = 0; s < 3; ++s)
+        for (int d = 0; d < 3; ++d) {
+            e->build_strategy = (bvh::BuildStrategy)s;
+            e->density = d;
+            rebuild_field(e);
+
+            for (int i = 0; i < WARMUP; ++i) bench_frame(e);
+
+            double rsum = 0; long nsum = 0;
+            for (int i = 0; i < MEASURE; ++i) {
+                FrameMeas m = bench_frame(e);
+                rsum += m.render_ms; nsum += m.nodes;
+            }
+            double ravg = rsum / MEASURE;
+            long   rays = (long)e->fb.width * e->fb.height;
+            double npr  = rays > 0 ? (double)nsum / MEASURE / rays : 0.0;
+            size_t tris = e->field_bvh.triangle_count();
+            size_t nn   = e->field_bvh.node_count();
+
+            std::cout << sn[s] << "\t" << dn[d]
+                      << "\ttris=" << tris << "\tnodes=" << nn
+                      << "\tbuild=" << e->field_build_ms << "ms"
+                      << "\trender=" << ravg << "ms"
+                      << "\tn/ray=" << npr << "\n";
+            csv << sn[s] << "," << dn[d] << "," << tris << "," << nn << ","
+                << e->field_build_ms << "," << ravg << "," << npr << "\n";
+        }
+    std::cout << "=========== done -> docs/benchmark.csv ===========\n\n";
+}
+
+
 void game_render(Game *e, SDL_Texture *sdl_fb_texture, float dt)
 {
     uint64_t t = SDL_GetPerformanceCounter();
     double ms_build = 0, ms_core = 0; // build_scene_tris vs. the actual render
 
     e->fb.clear(0xFF222222);
+
+    long node_visits = 0;   // total BVH nodes tested this frame (all threads)
 
     if (e->raytrace_mode)
     {
@@ -1191,6 +1278,10 @@ void game_render(Game *e, SDL_Texture *sdl_fb_texture, float dt)
         // its stripe is done.
         for (int i = 0; i < Game::NUM_WORKERS; ++i) SDL_SemPost(e->start_sems[i]);
         for (int i = 0; i < Game::NUM_WORKERS; ++i) SDL_SemWait(e->done_sem);
+
+        // Sum the per-thread node-visit counters (tree-quality metric).
+        for (int i = 0; i < Game::NUM_WORKERS; ++i) node_visits += e->worker_args[i].visits;
+
         ms_core = tick_ms(t);
     }
     else
@@ -1246,6 +1337,8 @@ void game_render(Game *e, SDL_Texture *sdl_fb_texture, float dt)
         draw_bvh_debug(e);
     }
     double ms_present = tick_ms(t); // gizmo + HUD build so far (cheap)
+    long   rays = (long)e->fb.width * e->fb.height;
+    double nodes_per_ray = rays > 0 ? (double)node_visits / rays : 0.0;
     char HUD[460] = {0};
     snprintf(HUD, sizeof(HUD),
         "=== SR-LEC (%s) ===\n"
@@ -1254,10 +1347,11 @@ void game_render(Game *e, SDL_Texture *sdl_fb_texture, float dt)
         "render: %.1fms  build: %.1fms\n"
         "rest: %.1fms\n"
         "Tris: %zu  Nodes: %zu  Room: %zu  Field: %zu\n"
-        "Accel: %s\n"
+        "Accel: %s   Build: %s\n"
+        "nodes/ray: %.1f   field build: %.2fms\n"
         "Threads: %d\n"
         "Move: %s\n"
-        "[TAB] mode [B] BVH [V] vis [M] menu\n[SPACE x2] walk/fly\n",
+        "[TAB] mode [B] BVH [V] vis [M] menu [F1] bench\n[SPACE x2] walk/fly\n",
         e->raytrace_mode ? "RAYTRACE" : "RASTER",
         dt * 1000.0f,
         1.0f / dt,
@@ -1266,6 +1360,9 @@ void game_render(Game *e, SDL_Texture *sdl_fb_texture, float dt)
         e->bvh.triangle_count(), e->bvh.node_count(), e->room_bvh.triangle_count(),
         e->field_bvh.triangle_count(),
         e->use_bvh ? "BVH (fast)" : "BRUTE FORCE (slow)",
+        e->build_strategy == bvh::SAH    ? "SAH"
+      : e->build_strategy == bvh::Median ? "Median" : "Morton",
+        nodes_per_ray, e->field_build_ms,
         Game::NUM_WORKERS,
         e->fly_mode ? "FLY" : "WALK");
     draw_text(e->fb, 22, 22, HUD, 0x88000000, 0x88000000);
@@ -1297,6 +1394,12 @@ void game_handle_events(Game *e, SDL_Event &event, bool &running)
         Uint32 now = SDL_GetTicks();
         if (now - e->last_space_ms < 300) e->fly_mode = !e->fly_mode;
         e->last_space_ms = now;
+    }
+
+    // [F1] runs the full benchmark sweep (writes docs/benchmark.csv).
+    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_F1) {
+        run_benchmark(e);
+        return;
     }
 
     // While the menu is open, arrows/enter drive it (not the camera).

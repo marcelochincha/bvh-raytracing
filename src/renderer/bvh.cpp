@@ -6,6 +6,10 @@
 
 namespace bvh {
 
+namespace { thread_local long tl_node_visits = 0; }
+void reset_thread_node_visits() { tl_node_visits = 0; }
+long take_thread_node_visits()  { long v = tl_node_visits; tl_node_visits = 0; return v; }
+
 // ---- small AABB helpers ----------------------------------------------------
 
 static inline AABB aabb_empty() {
@@ -80,14 +84,57 @@ static inline bool tri_hit(const Tri& tr, const vec3& o, const vec3& d, float& t
 
 // ---- build -----------------------------------------------------------------
 
-void BVH::build(std::vector<Tri> tris) {
-    tris_  = std::move(tris);
+// 30-bit Morton (Z-order) code from a normalized [0,1] point: interleaves the
+// bits of x/y/z so that sorting by this code groups nearby points together.
+static inline uint32_t expand_bits_10(uint32_t v) {
+    v = (v | (v << 16)) & 0x030000FFu;
+    v = (v | (v <<  8)) & 0x0300F00Fu;
+    v = (v | (v <<  4)) & 0x030C30C3u;
+    v = (v | (v <<  2)) & 0x09249249u;
+    return v;
+}
+static inline uint32_t morton3d(float x, float y, float z) {
+    auto q = [](float f) {
+        return expand_bits_10((uint32_t)(std::clamp(f, 0.0f, 1.0f) * 1023.0f));
+    };
+    return (q(x) << 2) | (q(y) << 1) | q(z);
+}
+
+void BVH::build(std::vector<Tri> tris, BuildStrategy strategy) {
+    tris_     = std::move(tris);
+    strategy_ = strategy;
     nodes_.clear();
     if (tris_.empty()) return;
 
     centroids_.resize(tris_.size());
     for (std::size_t i = 0; i < tris_.size(); ++i)
         centroids_[i] = (tris_[i].v0 + tris_[i].v1 + tris_[i].v2) / 3.0f;
+
+    // Morton: globally sort triangles by the Z-order code of their centroid, so
+    // a plain index-median split in build_node yields a locality-ordered tree
+    // (fast to build, lower traversal quality than SAH).
+    if (strategy_ == Morton) {
+        AABB cb = aabb_empty();
+        for (const auto& c : centroids_) aabb_grow(cb, c);
+        vec3 ext = cb.max - cb.min;
+        std::vector<std::pair<uint32_t, int>> order(tris_.size());
+        for (std::size_t i = 0; i < tris_.size(); ++i) {
+            float nx = ext.x > 0 ? (centroids_[i].x - cb.min.x) / ext.x : 0.0f;
+            float ny = ext.y > 0 ? (centroids_[i].y - cb.min.y) / ext.y : 0.0f;
+            float nz = ext.z > 0 ? (centroids_[i].z - cb.min.z) / ext.z : 0.0f;
+            order[i] = { morton3d(nx, ny, nz), (int)i };
+        }
+        std::sort(order.begin(), order.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        std::vector<Tri>  nt(tris_.size());
+        std::vector<vec3> nc(centroids_.size());
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            nt[i] = tris_[order[i].second];
+            nc[i] = centroids_[order[i].second];
+        }
+        tris_       = std::move(nt);
+        centroids_  = std::move(nc);
+    }
 
     nodes_.reserve(tris_.size() * 2);   // upper bound on node count
     build_node(0, (int)tris_.size(), 0);
@@ -113,6 +160,31 @@ int BVH::partition(int start, int count, int axis,
         }
     }
     return i; // first index on the right side
+}
+
+// Median split: reorder [start, start+count) so the first half holds the
+// triangles with the smallest centroid along `axis`, then return the midpoint.
+// Uses quickselect, swapping tris_ and centroids_ together so they stay aligned.
+int BVH::partition_median(int start, int count, int axis) {
+    int mid = start + count / 2;
+    int lo = start, hi = start + count - 1;
+    while (lo < hi) {
+        float pivot = centroids_[(lo + hi) / 2].v[axis];
+        int i = lo, j = hi;
+        while (i <= j) {
+            while (centroids_[i].v[axis] < pivot) ++i;
+            while (centroids_[j].v[axis] > pivot) --j;
+            if (i <= j) {
+                std::swap(tris_[i], tris_[j]);
+                std::swap(centroids_[i], centroids_[j]);
+                ++i; --j;
+            }
+        }
+        if      (mid <= j) hi = j;
+        else if (mid >= i) lo = i;
+        else               break;
+    }
+    return mid;
 }
 
 int BVH::build_node(int start, int count, int depth) {
@@ -144,74 +216,84 @@ int BVH::build_node(int start, int count, int depth) {
     float cmin = cb.min.v[axis];
     float cext = ext.v[axis];
 
-    // Degenerate spread (all centroids coincide on this axis) -> leaf.
-    if (cext < 1e-8f) {
-        nodes_[idx].bounds = bounds;
-        nodes_[idx].left = -1;
-        nodes_[idx].start = start;
-        nodes_[idx].count = count;
-        return idx;
-    }
-
-    // --- Binned SAH ---
-    constexpr int NB = 12;
-    AABB bin_bounds[NB];
-    int  bin_count[NB] = {0};
-    for (int i = 0; i < NB; ++i) bin_bounds[i] = aabb_empty();
-
-    float scale = NB / cext;
-    for (int i = start; i < start + count; ++i) {
-        int b = (int)((centroids_[i].v[axis] - cmin) * scale);
-        if (b < 0) b = 0; if (b >= NB) b = NB - 1;
-        bin_bounds[b] = aabb_union(bin_bounds[b], tri_bounds(tris_[i]));
-        bin_count[b]++;
-    }
-
-    // Sweep to get, for each of the NB-1 split planes, the area*count of the
-    // left side and the right side.
-    float left_area[NB - 1], right_area[NB - 1];
-    int   left_cnt[NB - 1],  right_cnt[NB - 1];
-
-    AABB acc = aabb_empty(); int cnt = 0;
-    for (int i = 0; i < NB - 1; ++i) {
-        acc = aabb_union(acc, bin_bounds[i]);
-        cnt += bin_count[i];
-        left_area[i] = aabb_area(acc);
-        left_cnt[i]  = cnt;
-    }
-    acc = aabb_empty(); cnt = 0;
-    for (int i = NB - 1; i > 0; --i) {
-        acc = aabb_union(acc, bin_bounds[i]);
-        cnt += bin_count[i];
-        right_area[i - 1] = aabb_area(acc);
-        right_cnt[i - 1]  = cnt;
-    }
-
-    // Pick the split with the lowest SAH cost.
-    float best_cost = 1e30f;
-    int   best_split = -1;
-    for (int i = 0; i < NB - 1; ++i) {
-        float cost = left_area[i] * left_cnt[i] + right_area[i] * right_cnt[i];
-        if (cost < best_cost) { best_cost = cost; best_split = i; }
-    }
-
-    // Compare against the cost of NOT splitting (making a leaf). The 1.0f is a
-    // traversal-step constant; parent area normalizes the split cost.
-    float parent_area = aabb_area(bounds);
-    float split_cost  = 1.0f + best_cost / (parent_area > 0.0f ? parent_area : 1.0f);
-    float leaf_cost   = (float)count;
-    if (best_split < 0 || split_cost >= leaf_cost) {
-        nodes_[idx].bounds = bounds;
-        nodes_[idx].left = -1;
-        nodes_[idx].start = start;
-        nodes_[idx].count = count;
-        return idx;
-    }
-
-    // Partition in place; fall back to a median split if binning degenerates.
-    int mid = partition(start, count, axis, cmin, scale, best_split);
-    if (mid == start || mid == start + count)
+    int mid;
+    if (strategy_ == Morton) {
+        // Already globally sorted by Z-order: a balanced index split preserves
+        // spatial locality (fast build, lower-quality tree than SAH).
         mid = start + count / 2;
+    } else if (strategy_ == Median) {
+        // Split at the centroid median along the longest axis.
+        mid = partition_median(start, count, axis);
+    } else {
+        // --- Binned SAH ---
+        if (cext < 1e-8f) {                 // degenerate spread -> leaf
+            nodes_[idx].bounds = bounds;
+            nodes_[idx].left = -1;
+            nodes_[idx].start = start;
+            nodes_[idx].count = count;
+            return idx;
+        }
+
+        constexpr int NB = 12;
+        AABB bin_bounds[NB];
+        int  bin_count[NB] = {0};
+        for (int i = 0; i < NB; ++i) bin_bounds[i] = aabb_empty();
+
+        float scale = NB / cext;
+        for (int i = start; i < start + count; ++i) {
+            int b = (int)((centroids_[i].v[axis] - cmin) * scale);
+            if (b < 0) b = 0; if (b >= NB) b = NB - 1;
+            bin_bounds[b] = aabb_union(bin_bounds[b], tri_bounds(tris_[i]));
+            bin_count[b]++;
+        }
+
+        // Sweep to get, for each of the NB-1 split planes, the area*count of the
+        // left side and the right side.
+        float left_area[NB - 1], right_area[NB - 1];
+        int   left_cnt[NB - 1],  right_cnt[NB - 1];
+
+        AABB acc = aabb_empty(); int cnt = 0;
+        for (int i = 0; i < NB - 1; ++i) {
+            acc = aabb_union(acc, bin_bounds[i]);
+            cnt += bin_count[i];
+            left_area[i] = aabb_area(acc);
+            left_cnt[i]  = cnt;
+        }
+        acc = aabb_empty(); cnt = 0;
+        for (int i = NB - 1; i > 0; --i) {
+            acc = aabb_union(acc, bin_bounds[i]);
+            cnt += bin_count[i];
+            right_area[i - 1] = aabb_area(acc);
+            right_cnt[i - 1]  = cnt;
+        }
+
+        // Pick the split with the lowest SAH cost.
+        float best_cost = 1e30f;
+        int   best_split = -1;
+        for (int i = 0; i < NB - 1; ++i) {
+            float cost = left_area[i] * left_cnt[i] + right_area[i] * right_cnt[i];
+            if (cost < best_cost) { best_cost = cost; best_split = i; }
+        }
+
+        // Compare against the cost of NOT splitting (making a leaf). The 1.0f is
+        // a traversal-step constant; parent area normalizes the split cost.
+        float parent_area = aabb_area(bounds);
+        float split_cost  = 1.0f + best_cost / (parent_area > 0.0f ? parent_area : 1.0f);
+        float leaf_cost   = (float)count;
+        if (best_split < 0 || split_cost >= leaf_cost) {
+            nodes_[idx].bounds = bounds;
+            nodes_[idx].left = -1;
+            nodes_[idx].start = start;
+            nodes_[idx].count = count;
+            return idx;
+        }
+
+        // Partition in place; fall back to a median split if binning degenerates.
+        mid = partition(start, count, axis, cmin, scale, best_split);
+        if (mid == start || mid == start + count)
+            mid = start + count / 2;
+    }
+
 
     int l = build_node(start, mid - start, depth + 1);
     int r = build_node(mid, start + count - mid, depth + 1);
@@ -238,6 +320,7 @@ bool BVH::intersect(const vec3& origin, const vec3& dir, Hit& out) const {
     stack[sp++] = 0;
 
     while (sp > 0) {
+        ++tl_node_visits;                       // quality metric: nodes tested
         const Node& n = nodes_[stack[--sp]];
         float t_near;
         if (!aabb_hit(n.bounds, origin, inv, best, t_near)) continue;
@@ -272,6 +355,7 @@ bool BVH::occluded(const vec3& origin, const vec3& dir, float max_t) const {
     stack[sp++] = 0;
 
     while (sp > 0) {
+        ++tl_node_visits;                       // quality metric: nodes tested
         const Node& n = nodes_[stack[--sp]];
         float t_near;
         if (!aabb_hit(n.bounds, origin, inv, max_t, t_near)) continue;

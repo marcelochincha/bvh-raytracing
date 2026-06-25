@@ -45,11 +45,27 @@ struct Hit {
     int   tri = -1;      // index of the hit triangle (use BVH::tri(idx)), -1 = miss
 };
 
+// How the tree is split during construction. The build strategy trades build
+// speed against traversal quality, which is the whole point of the comparison
+// study: SAH (best tree, slower build), Median (cheap, decent), Morton (fastest
+// build, lower-quality tree).
+enum BuildStrategy { SAH = 0, Median = 1, Morton = 2 };
+
+// Per-thread traversal counters. Each worker thread accumulates how many BVH
+// nodes it tests while tracing; summing across threads yields the total node
+// visits per frame -> average nodes/ray, a hardware-independent tree-quality
+// metric. Uses thread_local storage so there is NO atomic on the hot path.
+void reset_thread_node_visits();        // zero THIS thread's counter
+long take_thread_node_visits();         // read & reset THIS thread's counter
+
 class BVH {
 public:
     // Build the tree over `tris` (consumes/moves the vector in). Triangles are
-    // reordered internally so each leaf owns a contiguous range.
-    void build(std::vector<Tri> tris);
+    // reordered internally so each leaf owns a contiguous range. `strategy`
+    // chooses the split heuristic (SAH by default — the original implementation).
+    void build(std::vector<Tri> tris, BuildStrategy strategy = SAH);
+
+    BuildStrategy strategy() const { return strategy_; }
 
     // Nearest hit. Returns true and fills `out` if anything is hit; `out.t`
     // can be pre-set to clamp the search distance (defaults to +inf).
@@ -95,6 +111,12 @@ private:
     int  build_node(int start, int count, int depth);
     int  partition(int start, int count, int axis,
                    float cmin, float scale, int split_bin);
+    // Reorder [start, start+count) so the first half holds the triangles with
+    // the smallest centroid along `axis` (median split). Swaps tris_ and
+    // centroids_ together. Returns the split index.
+    int  partition_median(int start, int count, int axis);
+
+    BuildStrategy strategy_ = SAH;
 };
 
 } // namespace bvh

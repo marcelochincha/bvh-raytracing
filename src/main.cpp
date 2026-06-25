@@ -46,6 +46,18 @@ int main(int argc, char *argv[])
     Game *game = game_create(global_config.window_width, global_config.window_height);
     game_init(game);
 
+    // --bench: run the full strategy x density sweep, write CSV, and exit
+    // (reproducible experiment data for the report).
+    if (global_config.bench) {
+        run_benchmark(game);
+        game_shutdown(game);
+        SDL_DestroyTexture(sdl_fb_texture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 0;
+    }
+
     bool running = true;
     const float DT = 1.0f / 60.0f;
     float deltaTimeSeconds = DT;
