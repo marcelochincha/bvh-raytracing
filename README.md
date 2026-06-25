@@ -1,11 +1,28 @@
-# BVH Raytracer — Estudio comparativo de estructuras de aceleración
+<p align="center">
+  <img src="docs/banner.svg" alt="BVH Raytracer" width="100%">
+</p>
+
+<p align="center">
+  <em>Ray tracer por software (CPU, multihilo) sobre un <b>BVH</b> — estudio comparativo de heurísticas de construcción y referencia con Intel Embree.</em>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/C%2B%2B-17-blue?logo=c%2B%2B&logoColor=white">
+  <img src="https://img.shields.io/badge/CMake-4-informational?logo=cmake&logoColor=white">
+  <img src="https://img.shields.io/badge/SDL2-renderer-1ba0e6?logo=sdl&logoColor=white">
+  <img src="https://img.shields.io/badge/Embree-4-orange?logo=intel&logoColor=white">
+  <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-success">
+  <img src="https://img.shields.io/badge/ray%20tracing-SAH%20%C2%B7%20Median%20%C2%B7%20Morton-9b59b6">
+</p>
+
+> Proyecto final — CS3014 Estructura de Datos Avanzados (2026-1).
+
+---
 
 Ray tracer por software (CPU, multihilo) cuya estructura central es un **BVH
 (Bounding Volume Hierarchy)** construido con la **heurística de área de
 superficie (SAH)** mediante *binning*. El proyecto es un **estudio comparativo**
 de estructuras/estrategias de construcción para el trazado de rayos.
-
-> Proyecto final — CS3014 Estructura de Datos Avanzados (2026-1).
 
 ---
 
