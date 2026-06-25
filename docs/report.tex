@@ -1,0 +1,166 @@
+\documentclass[10pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{geometry}
+\geometry{margin=2.1cm}
+\usepackage{caption}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+
+\title{Estudio comparativo de heurísticas de construcción de un BVH\\
+       para trazado de rayos en CPU}
+\author{CS3014 -- Estructura de Datos Avanzados (2026-1)\\[2pt]
+        \small Autor 1, Autor 2, Autor 3}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Un trazador de rayos ingenuo prueba cada rayo contra todos los triángulos
+($O(N)$ por rayo). Una jerarquía de volúmenes envolventes (BVH) reduce este
+costo a $\sim O(\log N)$ agrupando los triángulos en un árbol de cajas
+alineadas a los ejes (AABB). En este proyecto implementamos un ray tracer por
+CPU con BVH y comparamos \textbf{tres heurísticas de construcción} (SAH,
+median-split y Morton/LBVH) y una \textbf{referencia externa} (Intel Embree)
+sobre la misma geometría, midiendo tiempo de construcción, calidad del árbol
+(nodos visitados por rayo) y costo de recorrido. Los resultados confirman el
+tradeoff clásico: SAH produce el árbol de mejor calidad, Morton se construye
+más rápido pero da el peor árbol, y los kernels SIMD de Embree recorren
+$\sim 3\times$ más rápido que nuestra mejor SAH.
+\end{abstract}
+
+\section{Introducción}
+El trazado de rayos resuelve la visibilidad simulando el camino de la luz. Por
+cada píxel se emite al menos un rayo; con sombras y reflejos, varios. Para
+$P$ píxeles y $N$ triángulos, la fuerza bruta cuesta $O(P\cdot N)$ por frame,
+inmanejable para escenas de decenas de miles de triángulos. La aceleración
+consiste en una estructura que descarte grandes grupos de triángulos con pruebas
+baratas. El BVH es la opción dominante por su memoria $O(N)$ y su robustez.
+
+\section{El BVH y la heurística SAH}
+Un BVH agrupa los triángulos en un árbol binario de AABB anidadas: la raíz
+encierra toda la escena; cada nodo interior particiona sus triángulos entre dos
+hijos; las hojas guardan unos pocos triángulos. Un rayo prueba las cajas
+baratas primero y solo desciende por las que golpea, saltando subárboles
+enteros.
+
+La \textbf{heurística de área de superficie (SAH)} estima el costo esperado de
+un corte a partir del área de cada caja hijo (un rayo es más probable de entrar
+en una caja más grande):
+\[
+C_{\text{split}} = 1 + \frac{A_L\,n_L + A_R\,n_R}{A_{\text{padre}}}
+\]
+y se elige el corte de menor costo, comparándolo contra no partir (hoja). Para
+no evaluar todos los cortes, se agrupan los centroides en 12 \emph{bins} por eje
+(\emph{binned SAH}).
+
+\section{Estrategias de construcción comparadas}
+Implementamos tres estrategias, seleccionables en tiempo de ejecución:
+\begin{itemize}\itemsep0pt
+  \item \textbf{SAH} (\emph{binned}): la del apartado anterior. Mejor calidad,
+        construcción $O(N\log N)$.
+  \item \textbf{Median}: parte por la mediana de los centroides en el eje más
+        largo. Sencilla y rápida, calidad intermedia.
+  \item \textbf{Morton/LBVH}: ordena todos los triángulos por su código de
+        Morton (Z-order) del centroide y luego parte por el índice medio.
+        Construcción muy rápida, calidad menor.
+\end{itemize}
+El recorrido es iterativo con pila fija (profundidad $\leq 60$), intersección
+rayo--AABB por \emph{slabs} y rayo--triángulo por Möller--Trumbore.
+
+\section{Metodología experimental}
+Escena: ciudad procedural de edificios (fachadas con ventanas) en tres tamaños
+(\emph{Small}/\emph{Medium}/\emph{Large}, $\sim$16k--33k triángulos). Para cada
+estrategia medimos, sobre el mismo conjunto de rayos primarios:
+\begin{itemize}\itemsep0pt
+  \item \textbf{build}: tiempo de construir el árbol.
+  \item \textbf{nodos/ray}: nodos del BVH probados por rayo (calidad del árbol;
+        independiente del hardware $\Rightarrow$ comparable entre máquinas).
+  \item \textbf{traversal}: tiempo de intersección pura, \emph{single-threaded}
+        y sin sombreado $\Rightarrow$ comparación justa con Embree.
+\end{itemize}
+Como referencia externa usamos \textbf{Intel Embree 4} sobre los mismos
+triángulos (mismos rayos, \texttt{rtcIntersect1}). Plataforma: Apple Silicon
+(ARM64, NEON). Código: \texttt{-O2 -march=native}.
+
+\section{Resultados}
+
+\begin{table}[h]\centering\small
+\caption{Escena \emph{Medium} ($\sim$19{,}750 triángulos).}
+\setlength{\tabcolsep}{4pt}\begin{tabular}{lrrrrr}\toprule
+Estrategia & build (ms) & render (ms) & traversal (ms) & nodos/ray \\\midrule
+SAH    & 3.67 & \textbf{19.7} & 27.8 & \textbf{218} \\
+Median & 3.37 & 32.7          & 45.5 & 388 \\
+Morton & \textbf{1.76} & 47.6 & 64.3 & 542 \\
+Embree & 2.31 & ---           & \textbf{9.96} & --- \\\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]\centering
+\begin{minipage}[t]{0.49\textwidth}\centering
+\includegraphics[width=\textwidth]{fig_tradeoff.png}\\
+\small Tradeoff build vs.\ render: SAH más a la derecha pero más abajo.
+\end{minipage}\hfill
+\begin{minipage}[t]{0.49\textwidth}\centering
+\includegraphics[width=\textwidth]{fig_quality.png}\\
+\small Calidad: nodos/ray (menos mejor). SAH gana.
+\end{minipage}
+\end{figure}
+
+\begin{figure}[h]\centering
+\begin{minipage}[t]{0.49\textwidth}\centering
+\includegraphics[width=\textwidth]{fig_embree.png}\\
+\small Traversal vs.\ Embree (\emph{Medium}): $\sim 3\times$ más rápido.
+\end{minipage}\hfill
+\begin{minipage}[t]{0.49\textwidth}\centering
+\includegraphics[width=\textwidth]{fig_scaling.png}\\
+\small Escalado: render vs.\ número de triángulos.
+\end{minipage}
+\end{figure}
+
+\section{Discusión}
+\textbf{Entre nuestras heurísticas}, los resultados confirman el tradeoff
+build--calidad: Morton se construye $\sim 2\times$ más rápido que SAH pero su
+árbol es $\sim 2.5\times$ peor (542 vs.\ 218 nodos/ray), lo que lastra su
+render. SAH es el ganador global en tiempo de render.
+
+\textbf{Frente a Embree}, la brecha en \emph{traversal} ($\sim 3\times$) NO se
+explica por la calidad del árbol (nuestra SAH es competitiva) sino por la
+\textbf{ingeniería del kernel}: Embree recorre el árbol con SIMD (NEON) procesa
+varios nodos/rayos a la vez, usa nodos de 4/8 vías (MBVH) y un \emph{layout}
+alineado a línea de caché. Es decir, nuestra \emph{estructura de datos} es
+razonable; la diferencia está en la \emph{implementación} del recorrido ---una
+distinción relevante para una materia de estructuras de datos.
+
+\section{Limitaciones y trabajo futuro}
+La rúbrica valora las continuaciones; para cerrar la brecha con Embree:
+\begin{itemize}\itemsep0pt
+  \item Recorrido \textbf{SIMD/NEON}: procesar varios rayos (o varios hijos)
+        por instrucción.
+  \item \textbf{MBVH}: nodos de 4 vías en vez de binarios $\Rightarrow$ menos
+        nodos visitados.
+  \item \textbf{Layout SoA} y nodos cuantizados para mejor uso de caché.
+  \item Construcción paralela y un modo de comparación de Morton con BVH
+        espacial (SBVH) para geometría que se intersecta.
+\end{itemize}
+
+\section{Conclusiones y contribuciones}
+Implementamos un ray tracer con BVH y un \emph{benchmark} reproducible
+(\texttt{-{}-bench}) que compara heurísticas y la referencia Embree. El estudio
+muestra empíricamente que \textbf{SAH} ofrece el mejor árbol, que
+\textbf{Morton} intercambia calidad por velocidad de construcción, y cuantifica
+la diferencia con el estado del arte industrial.
+
+\paragraph{Contribuciones por autor.} (a completar) Autor 1: BVH y heurísticas;
+Autor 2: escena y renderer; Autor 3: métricas, \emph{benchmark} y Embree.
+
+\paragraph{Repositorio y demo.} Código, datos (\texttt{docs/benchmark.csv}),
+gráficas (\texttt{docs/fig\_*.png}) y script (\texttt{docs/plot.py}) en el
+repositorio del proyecto; video demo y diapositivas en los enlaces adjuntos.
+
+\end{document}
