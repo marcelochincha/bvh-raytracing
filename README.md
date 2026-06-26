@@ -3,14 +3,15 @@
 </p>
 
 <p align="center">
-  <em>Ray tracer por software (CPU, multihilo) sobre un <b>BVH</b> — estudio comparativo de heurísticas de construcción y referencia con Intel Embree.</em>
+  <em>Ray tracer por software (CPU, multihilo) sobre un <b>BVH</b> — estudio comparativo de heurísticas de construcción, referencia con Intel Embree y backend GPU con OpenCL.</em>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/C%2B%2B-17-blue?logo=c%2B%2B&logoColor=white">
   <img src="https://img.shields.io/badge/CMake-4-informational?logo=cmake&logoColor=white">
-  <img src="https://img.shields.io/badge/SDL2-renderer-1ba0e6?logo=sdl&logoColor=white">
+  <img src="https://img.shields.io/badge/SDL2-bundled-1ba0e6?logo=sdl&logoColor=white">
   <img src="https://img.shields.io/badge/Embree-4-orange?logo=intel&logoColor=white">
+  <img src="https://img.shields.io/badge/OpenCL-1.2-red?logo=khronos&logoColor=white">
   <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-success">
   <img src="https://img.shields.io/badge/ray%20tracing-SAH%20%C2%B7%20Median%20%C2%B7%20Morton-9b59b6">
 </p>
@@ -19,10 +20,15 @@
 
 ---
 
-Ray tracer por software (CPU, multihilo) cuya estructura central es un **BVH
-(Bounding Volume Hierarchy)** construido con la **heurística de área de
-superficie (SAH)** mediante *binning*. El proyecto es un **estudio comparativo**
-de estructuras/estrategias de construcción para el trazado de rayos.
+Ray tracer por software cuya estructura central es un **BVH (Bounding Volume
+Hierarchy)** construido con la **heurística de área de superficie (SAH)**
+mediante *binning*. El proyecto es un **estudio comparativo** de tres backends:
+
+| Backend | Dónde corre | Tecla |
+|---|---|---|
+| **Custom BVH** (SAH / Median / Morton) | CPU, multihilo | — |
+| **Intel Embree 4** | CPU, SIMD AVX | — |
+| **GPU OpenCL** | GPU (OpenCL 1.2) | `G` |
 
 ---
 
@@ -60,18 +66,14 @@ docs/                           # informe (LaTeX)
 
 ## Dependencias
 
-- **SDL2** (única dependencia obligatoria). Opcionalmente `SDL2_mixer` si se reactiva el
-  sonido (desactivado en este repo).
-- **Intel Embree 4** (opcional) — referencia externa del estudio. Si está instalado,
-  se detecta solo y el benchmark añade una fila "Embree".
+El repositorio es **self-contained en Windows**: todas las dependencias están
+incluidas en `third_party/`, `lib/` y `bin/` — no hay que instalar nada.
 
-Instalación:
-
-| Plataforma | Comando |
-|---|---|
-| macOS (Homebrew) | `brew install sdl2 embree` |
-| Windows | SDL2 dev libs + Embree (binarios oficiales) |
-| Linux (Debian/Ubuntu) | `sudo apt install libsdl2-dev libembree-dev` |
+| Librería | Windows | macOS |
+|---|---|---|
+| **SDL2** | bundled (`lib/libSDL2.a`) | `brew install sdl2` |
+| **Intel Embree 4** | bundled (`lib/embree4.lib`) | bundled (mismo repo) |
+| **OpenCL** | bundled (`lib/libOpenCL.a`) | framework del sistema (incluido en macOS) |
 
 ## Estudio comparativo (benchmark)
 
@@ -90,24 +92,41 @@ construye más rápido pero da el peor árbol; los kernels SIMD de Embree recorr
 
 ## Cómo compilar y ejecutar
 
-Usa **CMake** (multiplataforma: macOS Apple Silicon nativo, Windows, Linux):
+El repo es self-contained: no se necesita ninguna flag extra en Windows.
 
+**Windows (MinGW):**
+```sh
+cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+
+# Con backend GPU OpenCL:
+cmake -S . -B build -G "MinGW Makefiles" -DWITH_OPENCL=ON
+cmake --build build -j
+```
+
+**macOS / Linux:**
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
-# Ejecutar (desde la raíz del repo, para que encuentre res/)
-./build/bin/bvh_raytracer --width 814 --height 480 --fps 60
+# Con OpenCL en macOS (framework del sistema):
+cmake -S . -B build -DWITH_OPENCL=ON
+cmake --build build -j
 ```
 
-> En Windows el binario será `build\bin\bvh_raytracer.exe`. Asegúrate de que
-> `SDL2.dll` esté accesible (junto al ejecutable o en el `PATH`).
+**Ejecutar** (desde la raíz del repo, para que encuentre `res/`):
+```sh
+./build/bin/bvh_raytracer --width 1280 --height 720
+# Windows:
+build\bin\bvh_raytracer.exe --width 1280 --height 720
+```
 
 ## Controles
 
 - `TAB` — alternar rasterizador / ray tracer
 - `B` — alternar BVH (rápido) vs fuerza bruta `O(N)` (lento)
 - `V` — superponer las cajas del BVH (debug)
+- `G` — **alternar GPU OpenCL** / CPU (solo si se compiló con `-DWITH_OPENCL=ON`)
 - `M` — **menú de opciones** (escena ciudad/esferas, densidad, reflejos, nº de rebotes, etc.); navega con ↑/↓ y cambia con ←/→
 - `WASD` + ratón — cámara/caminar · `ESPACIO`/`SHIFT` subir/bajar (en vuelo) · **doble `ESPACIO`** alterna caminar ↔ volar · `ESC` salir
 
@@ -127,6 +146,7 @@ central). Las superficies curvas (esferas, modelos) ya no se ven facetadas.
 - [x] Métricas + benchmark reproducible + gráficas comparativas
 - [x] Referencia externa Intel Embree (opcional)
 - [x] Sombreado suave + cargador OBJ
+- [x] Backend GPU OpenCL 1.2 (tecla `G`)
 - [ ] Visualización de la ruta de un rayo por el árbol (demo)
 - [ ] Reporte LaTeX + presentación + video
 
