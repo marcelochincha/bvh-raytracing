@@ -171,11 +171,6 @@ central). Las superficies curvas (esferas, modelos) ya no se ven facetadas.
 - [ ] Visualización de la ruta de un rayo por el árbol (demo)
 - [ ] Reporte LaTeX + presentación + video
 
-## Autores
-
-- *(tu nombre)*
-- *(compañeros)*
-
 ## Referencias
 
 1. J. Goldsmith, J. Salmon. *Automatic Creation of Object Hierarchies for Ray Tracing*. IEEE CG&A, 1987.
