@@ -374,6 +374,31 @@ bool BVH::occluded(const vec3& origin, const vec3& dir, float max_t) const {
     return false;
 }
 
+// ---- GPU flattening --------------------------------------------------------
+
+void BVH::flatten(std::vector<float>& nb, std::vector<int>& nl,
+                  std::vector<float>& tf) const {
+    nb.resize(nodes_.size() * 8);
+    nl.resize(nodes_.size() * 4);
+    for (std::size_t i = 0; i < nodes_.size(); ++i) {
+        const Node& n = nodes_[i];
+        nb[i*8+0] = n.bounds.min.x; nb[i*8+1] = n.bounds.min.y; nb[i*8+2] = n.bounds.min.z; nb[i*8+3] = 0.0f;
+        nb[i*8+4] = n.bounds.max.x; nb[i*8+5] = n.bounds.max.y; nb[i*8+6] = n.bounds.max.z; nb[i*8+7] = 0.0f;
+        nl[i*4+0] = n.left; nl[i*4+1] = n.right; nl[i*4+2] = n.start; nl[i*4+3] = n.count;
+    }
+    tf.resize(tris_.size() * 16);
+    for (std::size_t i = 0; i < tris_.size(); ++i) {
+        const Tri& t = tris_[i];
+        float* p = &tf[i*16];
+        p[0]=t.v0.x; p[1]=t.v0.y; p[2]=t.v0.z;
+        p[3]=t.v1.x; p[4]=t.v1.y; p[5]=t.v1.z;
+        p[6]=t.v2.x; p[7]=t.v2.y; p[8]=t.v2.z;
+        p[9]=t.normal.x; p[10]=t.normal.y; p[11]=t.normal.z;
+        p[12]=t.albedo.x; p[13]=t.albedo.y; p[14]=t.albedo.z;
+        p[15]=t.reflectivity;
+    }
+}
+
 // ---- debug -----------------------------------------------------------------
 
 void BVH::debug_nodes(std::vector<DebugNode>& out) const {

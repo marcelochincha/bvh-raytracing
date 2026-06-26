@@ -80,6 +80,15 @@ public:
     std::size_t node_count()        const { return nodes_.size(); }
     bool        empty()             const { return nodes_.empty(); }
 
+    // --- GPU export (for OpenCL backend) ---
+    // Flatten the tree into three parallel arrays consumable by the GPU kernel.
+    // node_bounds: 8 floats/node (min.xyz + pad, max.xyz + pad as two float4).
+    // node_links:  4 ints/node  (left, right, start, count; left<0 means leaf).
+    // tris:        16 floats/tri (v0,v1,v2,normal,albedo xyz, reflectivity).
+    void flatten(std::vector<float>& node_bounds,
+                 std::vector<int>&   node_links,
+                 std::vector<float>& tris) const;
+
     // --- Debug visualization ---
     // One entry per node, with its box, its depth in the tree (root = 0) and
     // whether it's a leaf. Lets a caller draw the hierarchy as wireframe.
