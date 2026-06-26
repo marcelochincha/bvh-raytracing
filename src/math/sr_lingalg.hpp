@@ -180,7 +180,7 @@ inline vec3 getEulerAngles(const mat4 &m)
         else
         {
             // Not a unique solution: roll - pitch = atan2(-m10,m11)
-            yaw = M_PI / 2.0f;
+            yaw = SR_PI / 2.0f;
             pitch = atan2f(-m(1, 0), m(1, 1));
             roll = 0;
         }
@@ -188,7 +188,7 @@ inline vec3 getEulerAngles(const mat4 &m)
     else
     {
         // Not a unique solution: roll + pitch = atan2(-m10,m11)
-        yaw = -M_PI / 2.0f;
+        yaw = -SR_PI / 2.0f;
         pitch = atan2f(-m(1, 0), m(1, 1));
         roll = 0;
     }
