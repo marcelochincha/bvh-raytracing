@@ -1,3 +1,6 @@
+# Third-party headers (place manually: SDL2/, CL/, embree4/ under third_party/)
+/third_party/
+
 # Build artifacts
 /build/
 /bin/
