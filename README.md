@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/C%2B%2B-17-blue?logo=c%2B%2B&logoColor=white">
   <img src="https://img.shields.io/badge/CMake-4-informational?logo=cmake&logoColor=white">
-  <img src="https://img.shields.io/badge/SDL2-bundled-1ba0e6?logo=sdl&logoColor=white">
+  <img src="https://img.shields.io/badge/SDL2-2.x-1ba0e6?logo=sdl&logoColor=white">
   <img src="https://img.shields.io/badge/Embree-4-orange?logo=intel&logoColor=white">
   <img src="https://img.shields.io/badge/OpenCL-1.2-red?logo=khronos&logoColor=white">
   <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-success">
@@ -66,14 +66,35 @@ docs/                           # informe (LaTeX)
 
 ## Dependencias
 
-El repositorio es **self-contained en Windows**: todas las dependencias están
-incluidas en `third_party/`, `lib/` y `bin/` — no hay que instalar nada.
+| Librería | Windows (MinGW) | macOS | Linux |
+|---|---|---|---|
+| **SDL2** | [SDL2-devel MinGW](https://github.com/libsdl-org/SDL/releases) | `brew install sdl2` | `apt install libsdl2-dev` |
+| **Intel Embree 4** | [embree Windows zip](https://github.com/RenderKit/embree/releases) | [embree macOS zip](https://github.com/RenderKit/embree/releases) | `apt install libembree-dev` o zip |
+| **OpenCL** (opcional) | [OpenCL-Headers](https://github.com/KhronosGroup/OpenCL-Headers) + ICD loader | framework del sistema (incluido) | `apt install opencl-headers ocl-icd-opencl-dev` |
 
-| Librería | Windows | macOS |
-|---|---|---|
-| **SDL2** | bundled (`lib/libSDL2.a`) | `brew install sdl2` |
-| **Intel Embree 4** | bundled (`lib/embree4.lib`) | bundled (mismo repo) |
-| **OpenCL** | bundled (`lib/libOpenCL.a`) | framework del sistema (incluido en macOS) |
+### macOS / Linux
+
+Instala los paquetes de la tabla y listo: `find_package` de CMake detecta las
+librerías del sistema automáticamente. No hay que copiar nada a mano.
+
+### Windows (MinGW)
+
+Solo en Windows hay que colocar manualmente los headers en `third_party/` y los
+binarios en `lib/` y `bin/` (ninguno está versionado en el repo):
+
+- `third_party/SDL2/` — headers del paquete SDL2-devel MinGW (`i686-w64-mingw32/include/SDL2/`)
+- `third_party/CL/` — headers de [OpenCL-Headers](https://github.com/KhronosGroup/OpenCL-Headers) (`CL/`)
+- `third_party/embree4/` — headers del zip de Embree (`include/embree4/`)
+- `lib/libSDL2.a`, `lib/libSDL2main.a` — del mismo paquete MinGW de SDL2
+- `lib/embree4.lib`, `lib/tbb.lib` — del zip de Embree
+- `lib/libOpenCL.a` — import library para `OpenCL.dll` (ya instalada por el driver de tu GPU). Si no la tienes de un SDK (CUDA, ROCm, oneAPI), genérala con MinGW:
+
+```sh
+gendef C:/Windows/System32/OpenCL.dll
+dlltool -D OpenCL.dll -d OpenCL.def -l lib/libOpenCL.a
+```
+
+- `bin/` — `SDL2.dll`, `embree4.dll`, `tbb12.dll`, `tbbmalloc.dll`, `libwinpthread-1.dll` (del zip de cada librería)
 
 ## Estudio comparativo (benchmark)
 
@@ -92,7 +113,7 @@ construye más rápido pero da el peor árbol; los kernels SIMD de Embree recorr
 
 ## Cómo compilar y ejecutar
 
-El repo es self-contained: no se necesita ninguna flag extra en Windows.
+Asegúrate de tener los headers en `third_party/` y los `.a`/`.lib` en `lib/` antes de configurar (ver sección Dependencias).
 
 **Windows (MinGW):**
 ```sh
