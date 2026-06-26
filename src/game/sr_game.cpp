@@ -5,6 +5,7 @@
 #include <renderer/sr_renderer.hpp>
 #include <renderer/bvh.hpp>
 #include <renderer/embree_bvh.hpp>   // optional (no-op unless WITH_EMBREE)
+#include <renderer/sr_ocl.hpp>       // optional (no-op unless WITH_OPENCL)
 #include <algorithm>
 #include <string>
 #include <cmath>
@@ -66,7 +67,9 @@ struct Game
     struct Ped { vec3 pos; vec3 shirt; float phase; float speed; };
     std::vector<Ped> peds;      // animated pedestrians (dynamic BVH)
     float bob_phase = 0.0f;     // first-person walk head-bob accumulator
-    bool  show_hud = true;      // draw the on-screen stats overlay
+    bool  show_hud    = true;   // draw the on-screen stats overlay
+    bool  hud_simple  = false;  // [H] compact one-liner vs full HUD
+    bool  use_gpu     = false;  // [G] GPU ray tracer via OpenCL (if available)
     bool  fly_mode = false;     // walk (ground) vs free-fly (double-tap SPACE)
     Uint32 last_space_ms = 0;   // for double-tap detection
 
@@ -835,6 +838,19 @@ static void rebuild_field(Game* e)
               << " (" << (e->build_strategy == bvh::SAH ? "SAH"
                        : e->build_strategy == bvh::Median ? "Median" : "Morton")
               << "): " << e->field_build_ms << " ms\n";
+
+    // Re-upload the static BVH to the GPU whenever the scene changes.
+    if (ocl::available()) {
+        std::vector<float> nb, tf; std::vector<int> nl;
+        if (!e->field_bvh.empty()) {
+            e->field_bvh.flatten(nb, nl, tf);
+            ocl::set_room(nb.data(), nl.data(), tf.data(),
+                          (int)e->field_bvh.node_count(),
+                          (int)e->field_bvh.triangle_count());
+        } else {
+            ocl::set_room(nullptr, nullptr, nullptr, 0, 0);
+        }
+    }
 }
 
 // Build (or rebuild) the rasterizer-side mirror of the field: one mesh whose
@@ -912,6 +928,30 @@ void game_init(Game *e)
 #endif
 
     build_scene_tris(e);
+
+    // --- OpenCL GPU backend (optional, falls back to CPU if unavailable) ---
+    if (ocl::init(e->max_bounces, AMBIENT, SHADOW_EPS)) {
+        // Upload the static field BVH once (the city / sphere field).
+        std::vector<float> nb, tf; std::vector<int> nl;
+        if (!e->field_bvh.empty()) {
+            e->field_bvh.flatten(nb, nl, tf);
+            ocl::set_room(nb.data(), nl.data(), tf.data(),
+                          (int)e->field_bvh.node_count(),
+                          (int)e->field_bvh.triangle_count());
+        } else {
+            ocl::set_room(nullptr, nullptr, nullptr, 0, 0);
+        }
+        // Upload skybox cubemap (all 6 faces concatenated).
+        std::vector<uint32_t> px; int off[6], w[6], h[6]; int cur = 0;
+        for (int i = 0; i < 6; ++i) {
+            const texture& t = e->skybox_faces[i];
+            w[i] = t.width; h[i] = t.height; off[i] = cur;
+            int n = t.width * t.height;
+            for (int k = 0; k < n; ++k) px.push_back(t.data ? t.data[k] : 0u);
+            cur += n;
+        }
+        ocl::set_sky(px.data(), (int)px.size(), off, w, h);
+    }
 
     // --- Spin up the persistent render thread pool (once) ---
     e->done_sem  = SDL_CreateSemaphore(0);
@@ -1396,16 +1436,36 @@ void game_render(Game *e, SDL_Texture *sdl_fb_texture, float dt)
         // flag is still set when the workers fire, all of them would race to
         // recompute and write the shared mutable cache at once (torn reads ->
         // garbage rays -> thin black lines). After this call the workers only read.
-        e->cam.rotation();
+        mat4 R = e->cam.rotation();
 
-        // Kick the persistent pool, then wait for it. Posting each worker's own
-        // start semaphore releases exactly that worker; each posts done_sem when
-        // its stripe is done.
-        for (int i = 0; i < Game::NUM_WORKERS; ++i) SDL_SemPost(e->start_sems[i]);
-        for (int i = 0; i < Game::NUM_WORKERS; ++i) SDL_SemWait(e->done_sem);
+        bool gpu = e->use_gpu && ocl::available();
+        if (gpu) {
+            // --- GPU path: upload dynamic BVH, trace all pixels on the GPU ---
+            std::vector<float> nb, tf; std::vector<int> nl;
+            e->bvh.flatten(nb, nl, tf);
+            ocl::set_dynamic(nb.data(), nl.data(), tf.data(),
+                             (int)e->bvh.node_count(), (int)e->bvh.triangle_count());
 
-        // Sum the per-thread node-visit counters (tree-quality metric).
-        for (int i = 0; i < Game::NUM_WORKERS; ++i) node_visits += e->worker_args[i].visits;
+            // Camera basis vectors (camera X/Y/-Z rotated to world space).
+            vec4 cx = R * vec4(1, 0, 0, 0);
+            vec4 cy = R * vec4(0, 1, 0, 0);
+            vec4 cz = R * vec4(0, 0, 1, 0);
+            float tb = tanf(to_radians(e->cam._fov) * 0.5f);
+            float ta = tb / e->cam._aspectRatio;
+
+            ocl::render(e->cam._position.x, e->cam._position.y, e->cam._position.z,
+                        cx.x, cx.y, cx.z, cy.x, cy.y, cy.z, cz.x, cz.y, cz.z,
+                        tb, ta, SUN_DIR.x, SUN_DIR.y, SUN_DIR.z,
+                        e->fb.width, e->fb.height, e->fb.colorBuffer);
+        }
+
+        // Re-check: ocl::render() disables itself on error, fall back to CPU pool.
+        if (!gpu || !ocl::available()) {
+            // Kick the persistent pool, then wait for it.
+            for (int i = 0; i < Game::NUM_WORKERS; ++i) SDL_SemPost(e->start_sems[i]);
+            for (int i = 0; i < Game::NUM_WORKERS; ++i) SDL_SemWait(e->done_sem);
+            for (int i = 0; i < Game::NUM_WORKERS; ++i) node_visits += e->worker_args[i].visits;
+        }
 
         ms_core = tick_ms(t);
     }
@@ -1461,38 +1521,64 @@ void game_render(Game *e, SDL_Texture *sdl_fb_texture, float dt)
         if (!e->raytrace_mode) build_scene_tris(e);
         draw_bvh_debug(e);
     }
-    double ms_present = tick_ms(t); // gizmo + HUD build so far (cheap)
+    double ms_present = tick_ms(t);
     long   rays = (long)e->fb.width * e->fb.height;
     double nodes_per_ray = rays > 0 ? (double)node_visits / rays : 0.0;
-    char HUD[460] = {0};
-    snprintf(HUD, sizeof(HUD),
-        "=== SR-LEC (%s) ===\n"
-        "Frametime: %.2fms (cap)\n"
-        "FPS: %.2f\n"
-        "render: %.1fms  build: %.1fms\n"
-        "rest: %.1fms\n"
-        "Tris: %zu  Nodes: %zu  Room: %zu  Field: %zu\n"
-        "Accel: %s   Build: %s\n"
-        "nodes/ray: %.1f   field build: %.2fms\n"
-        "Threads: %d\n"
-        "Move: %s\n"
-        "[TAB] mode [B] BVH [V] vis [M] menu [F1] bench\n[SPACE x2] walk/fly\n",
-        e->raytrace_mode ? "RAYTRACE" : "RASTER",
-        dt * 1000.0f,
-        1.0f / dt,
-        ms_core, ms_build,
-        ms_present,
-        e->bvh.triangle_count(), e->bvh.node_count(), e->room_bvh.triangle_count(),
-        e->field_bvh.triangle_count(),
-        e->use_bvh ? "BVH (fast)" : "BRUTE FORCE (slow)",
-        e->build_strategy == bvh::SAH    ? "SAH"
-      : e->build_strategy == bvh::Median ? "Median" : "Morton",
-        nodes_per_ray, e->field_build_ms,
-        Game::NUM_WORKERS,
-        e->fly_mode ? "FLY" : "WALK");
+
     if (e->show_hud) {
-        draw_text(e->fb, 22, 22, HUD, 0x88000000, 0x88000000);
-        draw_text(e->fb, 20, 20, HUD, 0xFFFFFFFF);
+        // Build backend label: "CPU (N threads)", "GPU: <device name>", or "GPU (unavail)"
+        char backend[192];
+        if (e->raytrace_mode && e->use_gpu && ocl::available())
+            snprintf(backend, sizeof(backend), "GPU: %s", ocl::device_name());
+        else if (e->raytrace_mode && e->use_gpu)
+            snprintf(backend, sizeof(backend), "GPU (unavailable)");
+        else
+            snprintf(backend, sizeof(backend), "CPU (%d threads)%s",
+                     Game::NUM_WORKERS,
+                     ocl::available() ? " [G->GPU]" : "");
+
+        if (e->hud_simple) {
+            // compact horizontal one-liner  [H] to expand
+            char line[192];
+            snprintf(line, sizeof(line),
+                "FPS: %.0f  |  %s  |  %s  |  BVH: %s  |  [H] expand",
+                1.0f / dt,
+                e->raytrace_mode ? "Raytrace" : "Raster",
+                backend,
+                e->use_bvh ? "On" : "Off");
+            draw_text(e->fb, 12, 12, line, 0x88000000, 0x88000000);
+            draw_text(e->fb, 10, 10, line, 0xFFFFFFFF);
+        } else {
+            // full verbose HUD  [H] to compact
+            char HUD[560] = {0};
+            snprintf(HUD, sizeof(HUD),
+                "=== SR-LEC (%s) ===\n"
+                "Frametime: %.2fms (cap)\n"
+                "FPS: %.2f\n"
+                "render: %.1fms  build: %.1fms\n"
+                "rest: %.1fms\n"
+                "Tris: %zu  Nodes: %zu  Room: %zu  Field: %zu\n"
+                "Accel: %s   Build: %s\n"
+                "nodes/ray: %.1f   field build: %.2fms\n"
+                "Backend: %s\n"
+                "Move: %s\n"
+                "[TAB] mode [B] BVH [V] vis [M] menu [F1] bench\n[SPACE x2] walk/fly  [H] compact  [G] GPU\n",
+                e->raytrace_mode ? "RAYTRACE" : "RASTER",
+                dt * 1000.0f,
+                1.0f / dt,
+                ms_core, ms_build,
+                ms_present,
+                e->bvh.triangle_count(), e->bvh.node_count(), e->room_bvh.triangle_count(),
+                e->field_bvh.triangle_count(),
+                e->use_bvh ? "BVH (fast)" : "BRUTE FORCE (slow)",
+                e->build_strategy == bvh::SAH    ? "SAH"
+              : e->build_strategy == bvh::Median ? "Median" : "Morton",
+                nodes_per_ray, e->field_build_ms,
+                backend,
+                e->fly_mode ? "FLY" : "WALK");
+            draw_text(e->fb, 22, 22, HUD, 0x88000000, 0x88000000);
+            draw_text(e->fb, 20, 20, HUD, 0xFFFFFFFF);
+        }
     }
 
     if (e->show_menu) draw_menu(e); // always on top, last
@@ -1546,6 +1632,12 @@ void game_handle_events(Game *e, SDL_Event &event, bool &running)
         e->use_bvh = !e->use_bvh;
     if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_v)
         e->show_bvh = !e->show_bvh;
+    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_h)
+        e->hud_simple = !e->hud_simple;
+    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_g) {
+        if (ocl::available())
+            e->use_gpu = !e->use_gpu;
+    }
 }
 
 void game_shutdown(Game *e)
