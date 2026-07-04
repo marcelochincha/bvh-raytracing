@@ -24,7 +24,6 @@ struct clipVertex
 
 //void sort_vertices_by_y(vec3 &v0, vec3 &v1, vec3 &v2);
 //void sort_raster_coord_by_y(rasterCoord &v0, rasterCoord &v1, rasterCoord &v2);
-//float interpolate_by_y(vec3 a, vec3 b, float y, vec_component c);
 //vec3 convert_to_fb(const framebuffer &fb, const vec3 &v);
 //uint32_t brightness_color(uint32_t color, float factor);
 //uint32_t sample_texture(const texture *tex, float s, float t);

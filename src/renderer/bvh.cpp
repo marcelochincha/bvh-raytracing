@@ -281,6 +281,16 @@ int BVH::build_node(int start, int count, int depth) {
         float split_cost  = 1.0f + best_cost / (parent_area > 0.0f ? parent_area : 1.0f);
         float leaf_cost   = (float)count;
         if (best_split < 0 || split_cost >= leaf_cost) {
+            // A handful of giant triangles (e.g. a flat floor quad) span the whole
+            // node, so every split leaves a child almost as big as the parent and
+            // the SAH judges no split worthwhile — collapsing hundreds of triangles
+            // into one fat leaf that every ray must test in full. Cap the leaf size:
+            // if it's still large, force a median split rather than accept the leaf.
+            if (count > MAX_LEAF) {
+                mid = partition_median(start, count, axis);
+                if (mid == start || mid == start + count) mid = start + count / 2;
+                goto do_split;
+            }
             nodes_[idx].bounds = bounds;
             nodes_[idx].left = -1;
             nodes_[idx].start = start;
@@ -294,7 +304,7 @@ int BVH::build_node(int start, int count, int depth) {
             mid = start + count / 2;
     }
 
-
+do_split:
     int l = build_node(start, mid - start, depth + 1);
     int r = build_node(mid, start + count - mid, depth + 1);
 
@@ -386,16 +396,29 @@ void BVH::flatten(std::vector<float>& nb, std::vector<int>& nl,
         nb[i*8+4] = n.bounds.max.x; nb[i*8+5] = n.bounds.max.y; nb[i*8+6] = n.bounds.max.z; nb[i*8+7] = 0.0f;
         nl[i*4+0] = n.left; nl[i*4+1] = n.right; nl[i*4+2] = n.start; nl[i*4+3] = n.count;
     }
-    tf.resize(tris_.size() * 16);
+    // Layout (32 floats/tri):
+    //  [0-2]  v0          [3-5]  v1         [6-8]  v2
+    //  [9-11] face normal [12-14] albedo
+    //  [15] roughness  [16] metallic  [17] ior  [18] smooth  [19] pad
+    //  [20-22] n0  [23-25] n1  [26-28] n2  [29-31] pad
+    tf.resize(tris_.size() * 32);
     for (std::size_t i = 0; i < tris_.size(); ++i) {
         const Tri& t = tris_[i];
-        float* p = &tf[i*16];
-        p[0]=t.v0.x; p[1]=t.v0.y; p[2]=t.v0.z;
-        p[3]=t.v1.x; p[4]=t.v1.y; p[5]=t.v1.z;
-        p[6]=t.v2.x; p[7]=t.v2.y; p[8]=t.v2.z;
+        float* p = &tf[i*32];
+        p[0]=t.v0.x;     p[1]=t.v0.y;     p[2]=t.v0.z;
+        p[3]=t.v1.x;     p[4]=t.v1.y;     p[5]=t.v1.z;
+        p[6]=t.v2.x;     p[7]=t.v2.y;     p[8]=t.v2.z;
         p[9]=t.normal.x; p[10]=t.normal.y; p[11]=t.normal.z;
-        p[12]=t.albedo.x; p[13]=t.albedo.y; p[14]=t.albedo.z;
-        p[15]=t.reflectivity;
+        p[12]=t.albedo.x;p[13]=t.albedo.y; p[14]=t.albedo.z;
+        p[15]=t.roughness;
+        p[16]=t.metallic;
+        p[17]=t.ior;
+        p[18]=t.smooth ? 1.0f : 0.0f;
+        p[19]=0.0f;
+        p[20]=t.n0.x; p[21]=t.n0.y; p[22]=t.n0.z;
+        p[23]=t.n1.x; p[24]=t.n1.y; p[25]=t.n1.z;
+        p[26]=t.n2.x; p[27]=t.n2.y; p[28]=t.n2.z;
+        p[29]=0.0f; p[30]=0.0f; p[31]=0.0f;
     }
 }
 

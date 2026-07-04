@@ -5,6 +5,8 @@
 #include <vector>
 #include <cstddef>
 
+struct texture; // forward-declared; include sr_texture.hpp to use
+
 // =============================================================================
 // Bounding Volume Hierarchy (BVH) — acceleration structure for ray tracing.
 //
@@ -28,15 +30,21 @@ namespace bvh {
 // A shadeable triangle: geometry the BVH needs + payload the shader needs.
 struct Tri {
     vec3  v0, v1, v2;
-    vec3  normal;        // face normal (used unless `smooth`)
-    vec3  albedo;        // [0,1]
-    float reflectivity;  // [0,1]
+    vec3  normal;           // face normal (used unless `smooth`)
+    vec3  albedo;           // base color [0,1]
+    float roughness = 0.5f; // [0,1] — 0=mirror, 1=fully matte
+    float metallic  = 0.0f; // [0,1] — 0=dielectric, 1=metal (no diffuse)
+    float ior       = 1.5f; // index of refraction (unused until BTDF added)
     // Per-vertex normals for smooth (Gouraud/Phong) shading. Flat geometry
     // leaves these zeroed + smooth=false and shades with `normal` (cheap);
     // smooth meshes (spheres, loaded OBJ) set smooth=true so the shader
     // interpolates n0/n1/n2 across the triangle.
-    bool  smooth = false;
+    bool  smooth    = false;
     vec3  n0, n1, n2;
+    vec3  emission  = vec3(0.0f, 0.0f, 0.0f); // emissive radiance (HDR)
+    // Per-vertex UVs for texture mapping; tex==nullptr means use albedo color.
+    vec2           uv0{}, uv1{}, uv2{};
+    const texture* tex = nullptr;
 };
 
 // Result of the nearest-hit query.
@@ -84,7 +92,8 @@ public:
     // Flatten the tree into three parallel arrays consumable by the GPU kernel.
     // node_bounds: 8 floats/node (min.xyz + pad, max.xyz + pad as two float4).
     // node_links:  4 ints/node  (left, right, start, count; left<0 means leaf).
-    // tris:        16 floats/tri (v0,v1,v2,normal,albedo xyz, reflectivity).
+    // tris:        32 floats/tri — v0,v1,v2,normal,albedo,roughness,metallic,ior,
+    //              smooth(0/1), pad, n0,n1,n2 (per-vertex normals), pad×3.
     void flatten(std::vector<float>& node_bounds,
                  std::vector<int>&   node_links,
                  std::vector<float>& tris) const;
@@ -116,6 +125,13 @@ private:
     // it — keeps every traversal stack within MAX_DEPTH. A slightly fat leaf
     // just means a few extra triangle tests, which is harmless.
     static constexpr int MAX_DEPTH = 60;
+
+    // Largest triangle count the SAH is allowed to leave in a single leaf. The
+    // SAH normally decides leaf-vs-split on cost alone, but a few very large
+    // triangles (a flat floor quad) can fool it into collapsing hundreds of
+    // triangles into one leaf (see build_node). Past this size we force a median
+    // split instead, keeping traversal fast regardless of such geometry.
+    static constexpr int MAX_LEAF = 8;
 
     int  build_node(int start, int count, int depth);
     int  partition(int start, int count, int axis,

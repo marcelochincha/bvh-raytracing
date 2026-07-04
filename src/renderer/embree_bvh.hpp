@@ -29,13 +29,17 @@ public:
     Scene& operator=(const Scene&) = delete;
 
     // Build an Embree triangle geometry over `tris` and commit (which builds
-    // Embree's internal BVH). Vertices are stored unshared (3 per triangle) for
-    // simplicity — memory is not what we compare here.
-    void build(const std::vector<bvh::Tri>& tris) {
+    // Embree's internal BVH). Build quality is mapped from our strategy:
+    // SAH -> HIGH, Median -> MEDIUM, Morton -> LOW.
+    void build(const std::vector<bvh::Tri>& tris, bvh::BuildStrategy strategy = bvh::SAH) {
         rtcReleaseScene(sc_);
         sc_ = rtcNewScene(dev_);
         verts_.clear();
         idx_.clear();
+        RTCBuildQuality q = RTC_BUILD_QUALITY_HIGH;
+        if (strategy == bvh::Median) q = RTC_BUILD_QUALITY_MEDIUM;
+        else if (strategy == bvh::Morton) q = RTC_BUILD_QUALITY_LOW;
+        rtcSetSceneBuildQuality(sc_, q);
         if (tris.empty()) { rtcCommitScene(sc_); return; }
 
         verts_.resize(tris.size() * 3 * 3);   // 3 verts * 3 floats per triangle
@@ -52,6 +56,7 @@ public:
         }
 
         RTCGeometry geom = rtcNewGeometry(dev_, RTC_GEOMETRY_TYPE_TRIANGLE);
+        rtcSetGeometryBuildQuality(geom, q);
         rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_VERTEX, 0, RTC_FORMAT_FLOAT3,
                                    verts_.data(), 0, 3 * sizeof(float), tris.size() * 3);
         rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3,
@@ -62,9 +67,8 @@ public:
         rtcCommitScene(sc_);   // <- builds Embree's BVH
     }
 
-    // Nearest hit. Returns true and fills `t` on hit (no shading — this backend
-    // exists to time Embree's traversal, not to render).
-    bool intersect(const vec3& o, const vec3& d, float& t) const {
+    // Nearest hit. Returns true and fills distance + primitive id on hit.
+    bool intersect(const vec3& o, const vec3& d, float& t, unsigned& prim) const {
         RTCRayHit rh;
         rh.ray.org_x = o.x; rh.ray.org_y = o.y; rh.ray.org_z = o.z;
         rh.ray.dir_x = d.x; rh.ray.dir_y = d.y; rh.ray.dir_z = d.z;
@@ -75,8 +79,22 @@ public:
         rtcInitIntersectArguments(&args);
         rtcIntersect1(sc_, &rh, &args);
         if (rh.hit.geomID == RTC_INVALID_GEOMETRY_ID) return false;
-        t = rh.ray.tfar;
+        t    = rh.ray.tfar;
+        prim = rh.hit.primID;
         return true;
+    }
+
+    // Any-hit query capped to max_t, used by shadow rays.
+    bool occluded(const vec3& o, const vec3& d, float max_t) const {
+        RTCRay r;
+        r.org_x = o.x; r.org_y = o.y; r.org_z = o.z;
+        r.dir_x = d.x; r.dir_y = d.y; r.dir_z = d.z;
+        r.tnear = 0.0f; r.tfar = max_t;
+        r.time  = 0.0f; r.mask = (unsigned)-1; r.flags = 0;
+        RTCOccludedArguments args;
+        rtcInitOccludedArguments(&args);
+        rtcOccluded1(sc_, &r, &args);
+        return r.tfar < 0.0f;
     }
 
 private:

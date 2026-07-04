@@ -23,7 +23,7 @@ namespace ocl {
 // --- The kernel. Mirrors trace_ray / BVH traversal from sr_game.cpp + bvh.cpp,
 // de-recursivized into a bounce loop. -------------------------------------------
 static const char* KERNEL_SRC = R"CLC(
-// MAXD / AMB / SEPS are injected via -D at build time from the C++ constants.
+// MAXD / AMB / SEPS injected via -D at build time.
 #ifndef MAXD
 #define MAXD 3
 #endif
@@ -34,6 +34,13 @@ static const char* KERNEL_SRC = R"CLC(
 #define SEPS 1e-4f
 #endif
 #define TEPS 1e-8f
+
+// Tri buffer layout (32 floats/tri — matches BVH::flatten):
+//  [0-2]  v0   [3-5]  v1   [6-8]  v2
+//  [9-11] face-normal   [12-14] albedo
+//  [15] roughness  [16] metallic  [17] ior  [18] smooth(0/1)  [19] pad
+//  [20-22] n0  [23-25] n1  [26-28] n2  [29-31] pad
+#define TSTRIDE 32
 
 inline float3 ld3(__global const float* a, int i){ return (float3)(a[i],a[i+1],a[i+2]); }
 
@@ -61,9 +68,25 @@ inline bool aabb_hit(float3 bmin,float3 bmax,float3 o,float3 inv,float tmax,floa
     *tnear=tmin; return true;
 }
 
-// Nearest hit in one BVH. Nodes are float4 pairs (lo, hi); links are int4
-// (left,right,start,count). Children bounds are tested before pushing (misses
-// skip); the nearer child is pushed last so it pops first -> best shrinks sooner.
+// Phong smooth normal: barycentric interpolation using Cramér's rule,
+// mirroring tri_smooth_normal() in sr_game.cpp.
+inline float3 phong_normal(__global const float* tris, int idx,
+                           float3 v0, float3 v1, float3 v2, float3 P){
+    float3 e1=v1-v0, e2=v2-v0, p=P-v0;
+    float d11=dot(e1,e1), d12=dot(e1,e2), d22=dot(e2,e2);
+    float p1=dot(p,e1), p2=dot(p,e2);
+    float det=d11*d22 - d12*d12;
+    if(fabs(det)<1e-12f) return ld3(tris,idx*TSTRIDE+9);
+    float v=(d22*p1-d12*p2)/det;
+    float w=(d11*p2-d12*p1)/det;
+    float u=1.0f-v-w;
+    float3 n0=ld3(tris,idx*TSTRIDE+20);
+    float3 n1=ld3(tris,idx*TSTRIDE+23);
+    float3 n2=ld3(tris,idx*TSTRIDE+26);
+    return normalize(u*n0 + v*n1 + w*n2);
+}
+
+// Nearest hit in one BVH. Near child pushed last so it pops first (best shrinks sooner).
 int bvh_traverse(__global const float4* nb, __global const int4* nl, int nn,
                  __global const float* tris, float3 o, float3 d, float3 inv, float* best){
     if(nn<=0) return -1;
@@ -77,7 +100,7 @@ int bvh_traverse(__global const float4* nb, __global const int4* nl, int nn,
         if(lk.x<0){
             int start=lk.z, cnt=lk.w;
             for(int i=start;i<start+cnt;i++){
-                float3 v0=ld3(tris,i*16), v1=ld3(tris,i*16+3), v2=ld3(tris,i*16+6);
+                float3 v0=ld3(tris,i*TSTRIDE), v1=ld3(tris,i*TSTRIDE+3), v2=ld3(tris,i*TSTRIDE+6);
                 float t;
                 if(tri_hit(v0,v1,v2,o,d,&t) && t<*best){ *best=t; besti=i; }
             }
@@ -98,7 +121,7 @@ int bvh_traverse(__global const float4* nb, __global const int4* nl, int nn,
     return besti;
 }
 
-// Any-hit (shadow ray). Stop at the first hit.
+// Any-hit shadow ray — stops at first hit.
 bool bvh_occluded(__global const float4* nb, __global const int4* nl, int nn,
                   __global const float* tris, float3 o, float3 d, float3 inv, float maxt){
     if(nn<=0) return false;
@@ -111,7 +134,7 @@ bool bvh_occluded(__global const float4* nb, __global const int4* nl, int nn,
         if(lk.x<0){
             int start=lk.z, cnt=lk.w;
             for(int i=start;i<start+cnt;i++){
-                float3 v0=ld3(tris,i*16), v1=ld3(tris,i*16+3), v2=ld3(tris,i*16+6);
+                float3 v0=ld3(tris,i*TSTRIDE), v1=ld3(tris,i*TSTRIDE+3), v2=ld3(tris,i*TSTRIDE+6);
                 float t;
                 if(tri_hit(v0,v1,v2,o,d,&t) && t<maxt) return true;
             }
@@ -133,7 +156,7 @@ float3 sample_face(__global const uint* px,int off,int w,int h,float u,float v){
     return (float3)(((c>>16)&0xFF)/255.0f, ((c>>8)&0xFF)/255.0f, (c&0xFF)/255.0f);
 }
 
-// Mirror sample_sky() from sr_game.cpp so GPU/CPU skies agree.
+// Mirrors sample_sky() from sr_game.cpp so GPU/CPU skies match.
 float3 sample_sky(__global const uint* px,__global const int* offs,
                   __global const int* ws,__global const int* hs, float3 d){
     float ax=fabs(d.x), ay=fabs(d.y), az=fabs(d.z);
@@ -148,13 +171,9 @@ float3 sample_sky(__global const uint* px,__global const int* offs,
 }
 
 __kernel void trace(
-    // dynamic BVH (floor + pedestrians, rebuilt each frame)
     __global const float4* dnb,__global const int4* dnl,int dnn,__global const float* dtris,
-    // static BVH (city / field, uploaded once)
     __global const float4* rnb,__global const int4* rnl,int rnn,__global const float* rtris,
-    // skybox cubemap
     __global const uint* skypx,__global const int* skyoff,__global const int* skyw,__global const int* skyh,
-    // camera
     float cpx,float cpy,float cpz,
     float axx,float axy,float axz, float ayx,float ayy,float ayz, float azx,float azy,float azz,
     float tb,float ta, float sunx,float suny,float sunz,
@@ -185,30 +204,64 @@ __kernel void trace(
         else { color += tp*sample_sky(skypx,skyoff,skyw,skyh,dir); break; }
 
         float3 P=orig + dir*best;
-        float3 N=ld3(htris,hidx*16+9);
-        if(dot(N,dir)>0.0f) N=-N;
-        float3 albedo=ld3(htris,hidx*16+12);
-        float refl=htris[hidx*16+15];
 
-        float ndl = fmax(0.0f, dot(N, sun));
-        float sunl = 0.0f;
-        if(ndl > 0.0f){
-            float3 so=P+N*SEPS;
+        // Smooth shading: interpolate per-vertex normals if the tri has them.
+        float3 N;
+        if(htris[hidx*TSTRIDE+18]>0.5f){
+            float3 v0=ld3(htris,hidx*TSTRIDE), v1=ld3(htris,hidx*TSTRIDE+3), v2=ld3(htris,hidx*TSTRIDE+6);
+            N=phong_normal(htris,hidx,v0,v1,v2,P);
+        } else {
+            N=ld3(htris,hidx*TSTRIDE+9);
+        }
+        if(dot(N,dir)>0.0f) N=-N;
+
+        // Geometric (face) normal oriented toward the ray — reliable "outside"
+        // reference to offset/bend secondary rays off the true surface.
+        float3 Ng=ld3(htris,hidx*TSTRIDE+9);
+        if(dot(Ng,dir)>0.0f) Ng=-Ng;
+
+        float3 albedo   = ld3(htris,hidx*TSTRIDE+12);
+        float roughness = htris[hidx*TSTRIDE+15];
+        float metallic  = htris[hidx*TSTRIDE+16];
+
+        // Flat ambient fill + white directional sun. (Per-normal skybox ambient
+        // looked like a fake env-map texture on diffuse surfaces; a constant
+        // keeps them solid. The only true environment mirror is the reflection.)
+        float ndl=fmax(0.0f,dot(N,sun));
+        float sunl=0.0f;
+        if(ndl>0.0f){
+            float3 so=P+Ng*SEPS;
             float3 sinv=(float3)(1.0f/sun.x,1.0f/sun.y,1.0f/sun.z);
             bool insh = bvh_occluded(rnb,rnl,rnn,rtris,so,sun,sinv,1e30f)
                      || bvh_occluded(dnb,dnl,dnn,dtris,so,sun,sinv,1e30f);
-            if(!insh) sunl = ndl*(1.0f-AMB);
+            if(!insh) sunl=ndl*(1.0f-AMB);
         }
+        float light=AMB+sunl;
 
-        float3 amb=sample_sky(skypx,skyoff,skyw,skyh,N)*AMB;
-        float3 light=(float3)(amb.x+sunl, amb.y+sunl, amb.z+sunl);
-        float3 loc=(float3)(albedo.x*light.x, albedo.y*light.y, albedo.z*light.z);
+        // Rough metals scatter energy widely; without multisampling we
+        // approximate that as a diffuse-lit term proportional to roughness.
+        float k_d=(1.0f-metallic)+metallic*roughness;
+        float3 loc=(float3)(albedo.x*light*k_d, albedo.y*light*k_d, albedo.z*light*k_d);
 
-        if(depth>=MAXD || refl<=0.0f){ color += tp*loc; break; }
-        color += tp*(1.0f-refl)*loc;
-        tp *= refl;
+        // Fresnel-Schlick: F0 = albedo mean for metals, 0.04 for dielectrics.
+        float cosV=fmax(0.0f,dot(N,-dir));
+        float F0=metallic>0.5f ? (albedo.x+albedo.y+albedo.z)/3.0f : 0.04f;
+        float fres=F0+(1.0f-F0)*pown(1.0f-cosV,5);
+        float spec=fres*(1.0f-roughness);
+
+        if(depth>=MAXD || spec<=0.01f){ color+=tp*loc; break; }
+
+        // Absorb the diffuse portion; carry spec * tint through the bounce.
+        color += tp*loc*(1.0f-spec);
+        float3 spec_tint=metallic>0.5f ? albedo : (float3)(1.0f,1.0f,1.0f);
+        tp *= spec*spec_tint;
         dir = dir - N*(2.0f*dot(dir,N));
-        orig = P + N*SEPS;
+        float RdotG=dot(dir,Ng);
+        if(RdotG<0.0f){
+            dir=normalize(dir - Ng*RdotG);
+            dir=normalize(dir + Ng*1e-4f);
+        }
+        orig = P+Ng*SEPS;
     }
 
     uint r=(uint)(clamp(color.x,0.0f,1.0f)*255.0f+0.5f);
@@ -291,7 +344,7 @@ void set_room(const float* nb, const int* nl, const float* tris, int nnodes, int
     g_rnn = nnodes;
     g_rnb   = buf_ro(nb,   (size_t)nnodes*8*sizeof(float));
     g_rnl   = buf_ro(nl,   (size_t)nnodes*4*sizeof(int));
-    g_rtris = buf_ro(tris, (size_t)ntris*16*sizeof(float));
+    g_rtris = buf_ro(tris, (size_t)ntris*32*sizeof(float));
     printf("[ocl] field BVH uploaded: %d nodes, %d tris (%s)\n",
            nnodes, ntris,
            (g_rnb && g_rnl && g_rtris) ? "OK" : "FAILED");
@@ -323,7 +376,7 @@ void set_dynamic(const float* nb, const int* nl, const float* tris, int nnodes, 
     g_dnn = nnodes;
     upload_reuse(&g_dnb,   &cap_nb,   nb,   (size_t)nnodes*8*sizeof(float));
     upload_reuse(&g_dnl,   &cap_nl,   nl,   (size_t)nnodes*4*sizeof(int));
-    upload_reuse(&g_dtris, &cap_tris, tris, (size_t)ntris*16*sizeof(float));
+    upload_reuse(&g_dtris, &cap_tris, tris, (size_t)ntris*32*sizeof(float));
 }
 
 void render(float cpx,float cpy,float cpz,
