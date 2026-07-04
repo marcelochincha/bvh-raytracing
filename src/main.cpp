@@ -10,6 +10,7 @@
 #include <renderer/sr_camera.hpp>
 #include <renderer/sr_texture.hpp>
 #include <renderer/sr_text.hpp>
+#include <sound/sr_sound.hpp>
 #include <game/sr_game.hpp>
 #include <sr_config.hpp>
 
@@ -42,7 +43,7 @@ int main(int argc, char *argv[])
     print_config(global_config);
 
     init_sdl();
-
+    sound_init(global_config.audio_rate);
     Game *game = game_create(global_config.window_width, global_config.window_height);
     game_init(game);
 
