@@ -50,16 +50,35 @@ if(NOT TARGET SDL2::SDL2)
     endif()
 endif()
 
+# ---- SDL2_mixer (bundled: third_party/SDL2/ + lib/) -------------------------
+set(SDL2_MIXER_LIB "${CMAKE_SOURCE_DIR}/lib/libSDL2_mixer.dll.a")
+
+if(EXISTS "${SDL2_MIXER_LIB}")
+    message(STATUS "SDL2_mixer (bundled): ${SDL2_MIXER_LIB}")
+    add_library(SDL2_mixer::SDL2_mixer IMPORTED STATIC GLOBAL)
+    set_target_properties(SDL2_mixer::SDL2_mixer PROPERTIES
+        IMPORTED_LOCATION "${SDL2_MIXER_LIB}"
+        INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/third_party/SDL2"
+        INTERFACE_LINK_LIBRARIES SDL2::SDL2)
+else()
+    message(STATUS "SDL2_mixer not found in lib/ -> building without audio")
+endif()
+
 # ---- Sources: every .cpp under src/, recursively ----------------------------
 file(GLOB_RECURSE APP_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/src/*.cpp")
 
-add_executable(${PROJECT_NAME} WIN32 ${APP_SOURCES})
+option(WIN32_GUI "Build as Windows GUI subsystem (hides console output)" OFF)
+if(WIN32 AND WIN32_GUI)
+    add_executable(${PROJECT_NAME} WIN32 ${APP_SOURCES})
+else()
+    add_executable(${PROJECT_NAME} ${APP_SOURCES})
+endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
-# ---- Link SDL2 --------------------------------------------------------------
-target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2)
+# ---- Link SDL2 & SDL2_mixer -------------------------------------------------
+target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 SDL2_mixer::SDL2_mixer)
 if(TARGET SDL2::SDL2main)
     target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2main)
 endif()
@@ -115,8 +134,12 @@ if(WITH_EMBREE)
     endif()
 endif()
 
+
 # ---- Tune for the host CPU --------------------------------------------------
-target_compile_options(${PROJECT_NAME} PRIVATE -march=native)
+# -ffast-math mirrors the GPU kernel's -cl-fast-relaxed-math: relaxed float
+# precision so the CPU ray tracer matches the GPU (e.g. grazing self-intersection
+# tests round the same way, avoiding mesh-aligned artifacts on pure mirrors).
+target_compile_options(${PROJECT_NAME} PRIVATE -march=native -ffast-math)
 
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /W3 /utf-8)
@@ -129,7 +152,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 
 # ---- Copy runtime DLLs next to the exe (Windows) ----------------------------
 if(WIN32)
-    foreach(DLL SDL2.dll libwinpthread-1.dll)
+    foreach(DLL SDL2.dll libwinpthread-1.dll SDL2_mixer.dll)
         if(EXISTS "${CMAKE_SOURCE_DIR}/bin/${DLL}")
             add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -148,6 +171,9 @@ if(WIN32)
                 COMMENT "Copying ${DLL}")
         endif()
     endforeach()
+
+
+
 endif()
 
 # ---- run target: cmake --build . --target run --------------------------------
