@@ -58,7 +58,9 @@ union vec4
 inline vec2 operator+(vec2 a, vec2 b) { return {a.x + b.x, a.y + b.y}; }
 inline vec2 operator-(vec2 a, vec2 b) { return {a.x - b.x, a.y - b.y}; }
 inline vec2 operator*(vec2 a, float s) { return {a.x * s, a.y * s}; }
+inline vec2 operator*(float s, vec2 a) { return {a.x * s, a.y * s}; }
 inline vec2 operator/(vec2 a, float s) { return {a.x / s, a.y / s}; }
+inline vec2 operator/(float s, vec2 a) { return {a.x / s, a.y / s}; }
 
 inline float dot(vec2 a, vec2 b) { return a.x * b.x + a.y * b.y; }
 inline float cross(vec2 a, vec2 b) { return a.x * b.y - a.y * b.x; }
@@ -76,7 +78,9 @@ inline vec3 operator+(vec3 a, vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}
 inline vec3 operator-(vec3 a, vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 inline vec3 operator-(vec3 a) { return {-a.x, -a.y, -a.z}; }
 inline vec3 operator*(vec3 a, float s) { return {a.x * s, a.y * s, a.z * s}; }
+inline vec3 operator*(float s,vec3 a) { return {a.x * s, a.y * s, a.z * s}; }
 inline vec3 operator/(vec3 a, float s) { return {a.x / s, a.y / s, a.z / s}; }
+inline vec3 operator/(float s, vec3 a) { return {a.x / s, a.y / s, a.z / s}; }
 
 inline float dot(vec3 a, vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 inline vec3 cross(vec3 a, vec3 b)
@@ -102,7 +106,9 @@ inline vec3::vec3(const vec4 &v) : x(v.x), y(v.y), z(v.z) {}
 inline vec4 operator+(vec4 a, vec4 b) { return {a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w}; }
 inline vec4 operator-(vec4 a, vec4 b) { return {a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w}; }
 inline vec4 operator*(vec4 a, float s) { return {a.x * s, a.y * s, a.z * s, a.w * s}; }
+inline vec4 operator*(float s, vec4 a) { return {a.x * s, a.y * s, a.z * s, a.w * s}; }
 inline vec4 operator/(vec4 a, float s) { return {a.x / s, a.y / s, a.z / s, a.w / s}; }
+inline vec4 operator/(float s, vec4 a) { return {a.x / s, a.y / s, a.z / s, a.w / s}; }
 
 inline float dot(vec4 a, vec4 b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 inline float magnitude(vec4 a) { return sqrtf(dot(a, a)); }
