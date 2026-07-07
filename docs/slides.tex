@@ -180,8 +180,49 @@
 \section{Introducci\'on}
 %==============================================================================
 
-\begin{frame}{¿Qu\'e es el ray tracing?}
-\begin{columns}[T]
+\begin{frame}{Contexto}
+\begin{figure}
+\centering
+\begin{columns}
+    \column{0.33\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{sceneB.png}
+    \column{0.33\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{sceneA.png}
+    \column{0.33\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{sceneC.png}
+\end{columns}
+\vspace{0.5em}
+\end{figure}
+\end{frame}
+
+
+% \begin{frame}{Contexto: d\'onde se usa}
+% \begin{columns}[T]
+% \begin{column}{0.6\textwidth}
+% \begin{itemize}\itemsep4pt
+%   \item \hl{Cine y animaci\'on:} render de producci\'on (Pixar, ILM).
+%   \item \hl{Videojuegos:} iluminaci\'on por trazado en tiempo real
+%         (NVIDIA RTX, consolas actuales).
+%   \item \hl{Dise\~no y arquitectura:} previsualizaci\'on fotorrealista.
+% \end{itemize}
+% \end{column}
+% \begin{column}{0.4\textwidth}
+% \begin{alertblock}{El cuello de botella}
+% El costo domina por el n\'umero de \emph{intersecciones rayo\,--\,geometr\'ia}.
+% Su viabilidad depende de una \hl{estructura de aceleraci\'on}.
+% \end{alertblock}
+% \end{column}
+% \end{columns}
+% \vspace{8pt}
+% \centering\footnotesize\textcolor{mute}{Ese es el punto de contacto con el curso: la estructura de datos \emph{es} lo que lo vuelve viable.}
+% \end{frame}
+
+
+\begin{frame}{Raytracing}
+\begin{columns}[c]
 \begin{column}{0.58\textwidth}
 \begin{itemize}\itemsep6pt
   \item T\'ecnica de renderizado que \hl{sigue el camino de la luz}: por cada
@@ -192,15 +233,10 @@
         un costo de c\'omputo alto.
 \end{itemize}
 \end{column}
-\begin{column}{0.42\textwidth}\centering
-\begin{tikzpicture}[scale=0.85,every node/.style={font=\scriptsize,text=ink}]
-  \draw[->,thick,primlt] (-0.2,0) -- (4.8,0.7) node[midway,above]{rayo};
-  \node[draw=primlt,fill=panellt,minimum width=1.3cm,minimum height=0.9cm] (a) at (4.8,0.7){};
-  \draw[->,thick,prim] (4.8,0.7) -- (3.0,2.4) node[midway,right]{reflejo};
-  \node[draw=prim,fill=panellt,circle,minimum size=0.5cm] at (2.8,2.6){};
-  \node[mute] at (4.8,-0.3) {superficie};
-  \node[mute] at (0,-0.3) {c\'amara};
-\end{tikzpicture}
+\begin{column}{0.42\textwidth}
+\begin{center}
+\includegraphics[width=0.9\textwidth]{raytrace.png}
+\end{center}
 \end{column}
 \end{columns}
 \end{frame}
@@ -245,7 +281,6 @@ pruebas por frame. Inviable en tiempo real con fuerza bruta $O(P\cdot N)$.
   \item Existe una estructura de aceleraci\'on jer\'arquica: el \alert{BVH}.
 \end{itemize}
 \end{frame}
-
 \begin{frame}{Escenas est\'aticas, din\'amicas y mixtas}
 \begin{columns}[T]
 \begin{column}{0.5\textwidth}
@@ -643,6 +678,22 @@ El kernel recorre con una \hl{pila expl\'icita}; modelo \hl{SIMT}: un
   \item \hl{GPU:} mismo \'arbol, $\sim$5{,}7$\times$ sobre CPU con SAH (SIMT, un p\'ixel por hilo).
   \item \hl{Embree:} frame casi constante ante la heur\'istica \textemdash{} usa su \emph{propio} \'arbol robusto.
 \end{itemize}
+\end{frame}
+
+\begin{frame}{Los tres \emph{backends}, frame completo}
+\begin{columns}[T]
+\begin{column}{0.58\textwidth}\centering
+\includegraphics[width=\textwidth,height=0.74\textheight,keepaspectratio]{fig_backends.png}
+\end{column}
+\begin{column}{0.42\textwidth}
+\begin{itemize}\itemsep3pt
+  \item Mismo frame completo en los tres (escala \emph{log}).
+  \item \hl{CPU y GPU usan \emph{nuestro} \''arbol} $\Rightarrow$ con Morton se disparan (104 y 25\,ms).
+  \item \hl{Embree usa el \emph{suyo}} $\Rightarrow$ apenas cambia (4{,}6\,$\to$\,7{,}9\,ms).
+  \item Con buen \''arbol (SAH) la \hl{GPU gana}; con \''arbol malo, \hl{Embree} es el m\'as robusto.
+\end{itemize}
+\end{column}
+\end{columns}
 \end{frame}
 
 \begin{frame}{Los tres \emph{backends}, frame completo}

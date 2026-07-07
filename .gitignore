@@ -31,7 +31,9 @@
 *.out
 *.toc
 *.pdf
-
+*.nav
+*.snm
+*.vrb
 # Demo capture intermediates (the .mp4 is kept)
 docs/demo_*.bmp
 tools/
