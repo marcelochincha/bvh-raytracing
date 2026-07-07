@@ -51,9 +51,15 @@ if(NOT TARGET SDL2::SDL2)
 endif()
 
 # ---- SDL2_mixer (bundled: third_party/SDL2/ + lib/) -------------------------
+# macOS/Linux: try a system/Homebrew install first via find_package.
+# Windows:     bundled static lib in lib/.
+find_package(SDL2_mixer QUIET)
+
 set(SDL2_MIXER_LIB "${CMAKE_SOURCE_DIR}/lib/libSDL2_mixer.dll.a")
 
-if(EXISTS "${SDL2_MIXER_LIB}")
+if(TARGET SDL2_mixer::SDL2_mixer OR TARGET SDL2_mixer::SDL2_mixer-static)
+    message(STATUS "SDL2_mixer (system) found via find_package")
+elseif(EXISTS "${SDL2_MIXER_LIB}")
     message(STATUS "SDL2_mixer (bundled): ${SDL2_MIXER_LIB}")
     add_library(SDL2_mixer::SDL2_mixer IMPORTED STATIC GLOBAL)
     set_target_properties(SDL2_mixer::SDL2_mixer PROPERTIES
@@ -78,7 +84,10 @@ endif()
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
 # ---- Link SDL2 & SDL2_mixer -------------------------------------------------
-target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 SDL2_mixer::SDL2_mixer)
+target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2)
+if(TARGET SDL2_mixer::SDL2_mixer)
+    target_link_libraries(${PROJECT_NAME} PRIVATE SDL2_mixer::SDL2_mixer)
+endif()
 if(TARGET SDL2::SDL2main)
     target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2main)
 endif()
@@ -115,22 +124,29 @@ if(WITH_OPENCL)
     endif()
 endif()
 
-# ---- Intel Embree (bundled: third_party/embree4/ + lib/) --------------------
-option(WITH_EMBREE "Use bundled Intel Embree 4" ON)
+# ---- Intel Embree (system via find_package, or bundled: third_party/embree4/) --
+option(WITH_EMBREE "Use Intel Embree 4 (system via find_package or bundled)" ON)
 if(WITH_EMBREE)
-    set(EMBREE_INCLUDE "${CMAKE_SOURCE_DIR}/third_party")
-    set(EMBREE_LIB     "${CMAKE_SOURCE_DIR}/lib/embree4.lib")
-
-    if(EXISTS "${EMBREE_INCLUDE}/embree4/rtcore.h" AND EXISTS "${EMBREE_LIB}")
-        message(STATUS "Embree 4 (bundled) -> WITH_EMBREE enabled")
-        add_library(embree4::embree4 IMPORTED STATIC GLOBAL)
-        set_target_properties(embree4::embree4 PROPERTIES
-            IMPORTED_LOCATION "${EMBREE_LIB}"
-            INTERFACE_INCLUDE_DIRECTORIES "${EMBREE_INCLUDE}")
+    find_package(embree 4 QUIET)
+    if(TARGET embree)
+        message(STATUS "Embree 4 (system) -> WITH_EMBREE enabled")
         target_compile_definitions(${PROJECT_NAME} PRIVATE WITH_EMBREE)
-        target_link_libraries(${PROJECT_NAME} PRIVATE embree4::embree4)
+        target_link_libraries(${PROJECT_NAME} PRIVATE embree)
     else()
-        message(STATUS "Embree NOT found in third_party/embree4/ -> building without it")
+        set(EMBREE_INCLUDE "${CMAKE_SOURCE_DIR}/third_party")
+        set(EMBREE_LIB     "${CMAKE_SOURCE_DIR}/lib/embree4.lib")
+
+        if(EXISTS "${EMBREE_INCLUDE}/embree4/rtcore.h" AND EXISTS "${EMBREE_LIB}")
+            message(STATUS "Embree 4 (bundled) -> WITH_EMBREE enabled")
+            add_library(embree4::embree4 IMPORTED STATIC GLOBAL)
+            set_target_properties(embree4::embree4 PROPERTIES
+                IMPORTED_LOCATION "${EMBREE_LIB}"
+                INTERFACE_INCLUDE_DIRECTORIES "${EMBREE_INCLUDE}")
+            target_compile_definitions(${PROJECT_NAME} PRIVATE WITH_EMBREE)
+            target_link_libraries(${PROJECT_NAME} PRIVATE embree4::embree4)
+        else()
+            message(STATUS "Embree NOT found (system nor third_party/embree4/) -> building without it")
+        endif()
     endif()
 endif()
 

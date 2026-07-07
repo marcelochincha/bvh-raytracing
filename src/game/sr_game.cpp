@@ -10,6 +10,7 @@
 #include <sr_config.hpp>
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 static const float kMouseSensitivity = 0.0025f;
 static const float kMinMoveSpeed     = 0.5f;   // mouse-wheel speed clamp: lower bound
@@ -135,9 +136,15 @@ void game_init(Game* e) {
     if (ocl::init(e->max_bounces, AMBIENT, SHADOW_EPS)) {
         std::vector<float> nb, tf; std::vector<int> nl;
         if (!e->static_bvh.empty()) {
-            e->static_bvh.flatten(nb, nl, tf);
+            bvh::BVH::GPUAtlas atlas;
+            std::unordered_map<const texture*, int> texmap;
+            e->static_bvh.build_atlas(atlas, texmap);
+            e->static_bvh.flatten(nb, nl, tf, &texmap);
             ocl::set_room(nb.data(), nl.data(), tf.data(),
                           (int)e->static_bvh.node_count(), (int)e->static_bvh.triangle_count());
+            ocl::set_room_textures(atlas.pixels.data(), (int)atlas.pixels.size(),
+                                   atlas.off.data(), atlas.w.data(), atlas.h.data(),
+                                   (int)atlas.off.size());
         } else {
             ocl::set_room(nullptr, nullptr, nullptr, 0, 0);
         }
@@ -285,9 +292,15 @@ void game_render(Game* e, SDL_Texture* sdl_fb_texture, float dt) {
 
         if (gpu) {
             std::vector<float> nb, tf; std::vector<int> nl;
-            e->dynamic_bvh.flatten(nb, nl, tf);
+            bvh::BVH::GPUAtlas atlas;
+            std::unordered_map<const texture*, int> texmap;
+            e->dynamic_bvh.build_atlas(atlas, texmap);
+            e->dynamic_bvh.flatten(nb, nl, tf, &texmap);
             ocl::set_dynamic(nb.data(), nl.data(), tf.data(),
                              (int)e->dynamic_bvh.node_count(), (int)e->dynamic_bvh.triangle_count());
+            ocl::set_dynamic_textures(atlas.pixels.data(), (int)atlas.pixels.size(),
+                                      atlas.off.data(), atlas.w.data(), atlas.h.data(),
+                                      (int)atlas.off.size());
             vec4 cx = R*vec4(1,0,0,0), cy = R*vec4(0,1,0,0), cz = R*vec4(0,0,1,0);
             float tb = tanf(to_radians(e->cam._fov)*0.5f), ta = tb/e->cam._aspectRatio;
             ocl::render(e->cam._position.x, e->cam._position.y, e->cam._position.z,

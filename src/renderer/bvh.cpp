@@ -1,4 +1,5 @@
 #include <renderer/bvh.hpp>
+#include <renderer/sr_texture.hpp>   // full `texture` definition for build_atlas
 
 #include <algorithm>
 #include <cmath>
@@ -427,8 +428,25 @@ bool BVH::intersect_debug(const vec3& origin, const vec3& dir, Hit& out,
 
 // ---- GPU flattening --------------------------------------------------------
 
+void BVH::build_atlas(GPUAtlas& out, std::unordered_map<const texture*, int>& texmap) const {
+    out.pixels.clear(); out.off.clear(); out.w.clear(); out.h.clear();
+    texmap.clear();
+    for (const Tri& t : tris_) {
+        if (!t.tex) continue;
+        if (texmap.find(t.tex) != texmap.end()) continue;  // already added
+        if (t.tex->width <= 0 || t.tex->height <= 0 || !t.tex->data) continue;
+        int id = (int)out.off.size();
+        texmap[t.tex] = id;
+        out.off.push_back((int)out.pixels.size());          // pixel offset
+        out.w.push_back(t.tex->width);
+        out.h.push_back(t.tex->height);
+        out.pixels.insert(out.pixels.end(), t.tex->data, t.tex->data + (std::size_t)t.tex->width * t.tex->height);
+    }
+}
+
 void BVH::flatten(std::vector<float>& nb, std::vector<int>& nl,
-                  std::vector<float>& tf) const {
+                  std::vector<float>& tf,
+                  const std::unordered_map<const texture*, int>* texmap) const {
     nb.resize(nodes_.size() * 8);
     nl.resize(nodes_.size() * 4);
     for (std::size_t i = 0; i < nodes_.size(); ++i) {
@@ -437,15 +455,17 @@ void BVH::flatten(std::vector<float>& nb, std::vector<int>& nl,
         nb[i*8+4] = n.bounds.max.x; nb[i*8+5] = n.bounds.max.y; nb[i*8+6] = n.bounds.max.z; nb[i*8+7] = 0.0f;
         nl[i*4+0] = n.left; nl[i*4+1] = n.right; nl[i*4+2] = n.start; nl[i*4+3] = n.count;
     }
-    // Layout (32 floats/tri):
-    //  [0-2]  v0          [3-5]  v1         [6-8]  v2
-    //  [9-11] face normal [12-14] albedo
-    //  [15] roughness  [16] metallic  [17] ior  [18] smooth  [19] pad
+    // Layout (40 floats/tri):
+    //  [0-2] v0   [3-5] v1   [6-8] v2
+    //  [9-11] face normal  [12-14] albedo
+    //  [15] roughness  [16] metallic  [17] ior  [18] smooth  [19] tex_id (-1 none)
     //  [20-22] n0  [23-25] n1  [26-28] n2  [29-31] emission
-    tf.resize(tris_.size() * 32);
+    //  [32-33] uv0  [34-35] uv1  [36-37] uv2  [38-39] pad
+    constexpr int STRIDE = 40;
+    tf.assign(tris_.size() * STRIDE, 0.0f);
     for (std::size_t i = 0; i < tris_.size(); ++i) {
         const Tri& t = tris_[i];
-        float* p = &tf[i*32];
+        float* p = &tf[i*STRIDE];
         p[0]=t.v0.x;     p[1]=t.v0.y;     p[2]=t.v0.z;
         p[3]=t.v1.x;     p[4]=t.v1.y;     p[5]=t.v1.z;
         p[6]=t.v2.x;     p[7]=t.v2.y;     p[8]=t.v2.z;
@@ -455,11 +475,18 @@ void BVH::flatten(std::vector<float>& nb, std::vector<int>& nl,
         p[16]=t.metallic;
         p[17]=t.ior;
         p[18]=t.smooth ? 1.0f : 0.0f;
-        p[19]=0.0f;
+        p[19]=-1.0f;  // tex_id (none by default)
         p[20]=t.n0.x; p[21]=t.n0.y; p[22]=t.n0.z;
         p[23]=t.n1.x; p[24]=t.n1.y; p[25]=t.n1.z;
         p[26]=t.n2.x; p[27]=t.n2.y; p[28]=t.n2.z;
         p[29]=t.emission.x; p[30]=t.emission.y; p[31]=t.emission.z;
+        p[32]=t.uv0.x; p[33]=t.uv0.y;
+        p[34]=t.uv1.x; p[35]=t.uv1.y;
+        p[36]=t.uv2.x; p[37]=t.uv2.y;
+        if (texmap && t.tex) {
+            auto it = texmap->find(t.tex);
+            if (it != texmap->end()) p[19] = (float)it->second;
+        }
     }
 }
 

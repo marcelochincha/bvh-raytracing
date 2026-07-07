@@ -3,7 +3,9 @@
 #include <math/sr_math.hpp>
 #include <renderer/sr_geometry.hpp> // AABB
 #include <vector>
+#include <unordered_map>
 #include <cstddef>
+#include <cstdint>
 
 struct texture; // forward-declared; include sr_texture.hpp to use
 
@@ -92,11 +94,21 @@ public:
     // Flatten the tree into three parallel arrays consumable by the GPU kernel.
     // node_bounds: 8 floats/node (min.xyz + pad, max.xyz + pad as two float4).
     // node_links:  4 ints/node  (left, right, start, count; left<0 means leaf).
-    // tris:        32 floats/tri — v0,v1,v2,normal,albedo,roughness,metallic,ior,
-    //              smooth(0/1), pad, n0,n1,n2 (per-vertex normals), pad×3.
+    // tris:        40 floats/tri (see bvh.cpp for the full layout). If `texmap`
+    //              is non-null, slot [19] gets the texture atlas id (else -1) and
+    //              slots [32-37] get the per-vertex UVs, so the GPU can sample.
+    struct GPUAtlas {
+        std::vector<uint32_t> pixels;   // all textures' ARGB pixels concatenated
+        std::vector<int> off, w, h;     // per-texture (tex_id indexes these)
+    };
+    // Collect every unique texture referenced by this BVH's triangles into one
+    // atlas (pixels + per-texture offset/width/height) and fill `texmap` so a
+    // subsequent flatten(..., &texmap) can write the matching tex_id per tri.
+    void build_atlas(GPUAtlas& out, std::unordered_map<const texture*, int>& texmap) const;
     void flatten(std::vector<float>& node_bounds,
                  std::vector<int>&   node_links,
-                 std::vector<float>& tris) const;
+                 std::vector<float>& tris,
+                 const std::unordered_map<const texture*, int>* texmap = nullptr) const;
 
     // --- Debug visualization ---
     // One entry per node, with its box, its depth in the tree (root = 0) and

@@ -279,13 +279,13 @@ vec3 trace_ray(const ray& r, const Game& e) {
 
 void ocl_upload_emissive(const Game& e) {
     if (!ocl::available()) return;
-    // Same 32-float record as BVH::flatten; the kernel only reads v0/v1/v2, the
+    // Same 40-float record as BVH::flatten; the kernel only reads v0/v1/v2, the
     // face normal and the emission, so the remaining slots stay zero.
     const auto& tris = e.emissive_tris;
-    std::vector<float> tf(tris.size() * 32, 0.0f);
+    std::vector<float> tf(tris.size() * 40, 0.0f);
     for (std::size_t i = 0; i < tris.size(); ++i) {
         const bvh::Tri& t = tris[i];
-        float* p = &tf[i * 32];
+        float* p = &tf[i * 40];
         p[0]=t.v0.x;      p[1]=t.v0.y;      p[2]=t.v0.z;
         p[3]=t.v1.x;      p[4]=t.v1.y;      p[5]=t.v1.z;
         p[6]=t.v2.x;      p[7]=t.v2.y;      p[8]=t.v2.z;

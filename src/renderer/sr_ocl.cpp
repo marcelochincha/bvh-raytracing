@@ -35,12 +35,13 @@ static const char* KERNEL_SRC = R"CLC(
 #endif
 #define TEPS 1e-8f
 
-// Tri buffer layout (32 floats/tri — matches BVH::flatten):
+// Tri buffer layout (40 floats/tri — matches BVH::flatten):
 //  [0-2]  v0   [3-5]  v1   [6-8]  v2
 //  [9-11] face-normal   [12-14] albedo
-//  [15] roughness  [16] metallic  [17] ior  [18] smooth(0/1)  [19] pad
+//  [15] roughness  [16] metallic  [17] ior  [18] smooth(0/1)  [19] tex_id(-1 none)
 //  [20-22] n0  [23-25] n1  [26-28] n2  [29-31] emission
-#define TSTRIDE 32
+//  [32-33] uv0  [34-35] uv1  [36-37] uv2  [38-39] pad
+#define TSTRIDE 40
 #define PI 3.14159265f
 
 inline float3 ld3(__global const float* a, int i){ return (float3)(a[i],a[i+1],a[i+2]); }
@@ -85,6 +86,25 @@ inline float3 phong_normal(__global const float* tris, int idx,
     float3 n1=ld3(tris,idx*TSTRIDE+23);
     float3 n2=ld3(tris,idx*TSTRIDE+26);
     return normalize(u*n0 + v*n1 + w*n2);
+}
+
+// Barycentric UV at point P (same Cramer barycentric as phong_normal), then
+// interpolate the per-vertex UVs stored at [32-37]. Used to sample the texture.
+inline float2 tri_uv(__global const float* tris, int idx, float3 P){
+    int b = idx*TSTRIDE;
+    float3 v0=ld3(tris,b), v1=ld3(tris,b+3), v2=ld3(tris,b+6);
+    float3 e1=v1-v0, e2=v2-v0, p=P-v0;
+    float d11=dot(e1,e1), d12=dot(e1,e2), d22=dot(e2,e2);
+    float p1=dot(p,e1), p2=dot(p,e2);
+    float det=d11*d22 - d12*d12;
+    if(fabs(det)<1e-12f) return (float2)(0.0f,0.0f);
+    float v=(d22*p1-d12*p2)/det;
+    float w=(d11*p2-d12*p1)/det;
+    float u=1.0f-v-w;
+    float2 uv0=(float2)(tris[b+32],tris[b+33]);
+    float2 uv1=(float2)(tris[b+34],tris[b+35]);
+    float2 uv2=(float2)(tris[b+36],tris[b+37]);
+    return uv0*u + uv1*v + uv2*w;
 }
 
 // Nearest hit in one BVH. Near child pushed last so it pops first (best shrinks sooner).
@@ -210,6 +230,8 @@ __kernel void trace(
     __global const float4* dnb,__global const int4* dnl,int dnn,__global const float* dtris,
     __global const float4* rnb,__global const int4* rnl,int rnn,__global const float* rtris,
     __global const uint* skypx,__global const int* skyoff,__global const int* skyw,__global const int* skyh,
+    __global const uint* ratlas,__global const int* raoff,__global const int* raw,__global const int* rah,
+    __global const uint* datlas,__global const int* daoff,__global const int* daw,__global const int* dah,
     __global const float* etris, int enn,
     float cpx,float cpy,float cpz,
     float axx,float axy,float axz, float ayx,float ayy,float ayz, float azx,float azy,float azz,
@@ -282,6 +304,15 @@ __kernel void trace(
             if(dot(Ng,dir)>0.0f) Ng=-Ng;
 
             float3 albedo   = ld3(htris,hidx*TSTRIDE+12);
+            // Object texture: if this tri has one, sample it (nearest) and use as albedo.
+            int tex_id = (int)(htris[hidx*TSTRIDE+19]);
+            if(tex_id >= 0){
+                float2 uv = tri_uv(htris,hidx,P);
+                __global const uint* apx; __global const int* aoff; __global const int* aww; __global const int* ahh;
+                if(htris == rtris){ apx=ratlas; aoff=raoff; aww=raw; ahh=rah; }
+                else              { apx=datlas; aoff=daoff; aww=daw; ahh=dah; }
+                albedo = sample_face(apx, aoff[tex_id], aww[tex_id], ahh[tex_id], uv.x, uv.y);
+            }
             float roughness = htris[hidx*TSTRIDE+15];
             float metallic  = htris[hidx*TSTRIDE+16];
             float k_d=(1.0f-metallic)+metallic*roughness;
@@ -379,6 +410,10 @@ static size_t g_rnb_cap=0, g_rnl_cap=0, g_rtris_cap=0;
 static cl_mem g_dnb=0, g_dnl=0, g_dtris=0; static int g_dnn=0;
 static cl_mem g_skypx=0, g_skyoff=0, g_skyw=0, g_skyh=0;
 static size_t g_skypx_cap=0, g_skyoff_cap=0, g_skyw_cap=0, g_skyh_cap=0;
+static cl_mem g_ratlas=0, g_raoff=0, g_raw=0, g_rah=0;
+static size_t g_ratlas_cap=0, g_raoff_cap=0, g_raw_cap=0, g_rah_cap=0;
+static cl_mem g_datlas=0, g_daoff=0, g_daw=0, g_dah=0;
+static size_t g_datlas_cap=0, g_daoff_cap=0, g_daw_cap=0, g_dah_cap=0;
 static cl_mem g_etris=0; static int g_enn=0; static size_t g_ecap=0;
 static cl_mem g_out=0; static int g_outw=0, g_outh=0;
 static char g_devname[256] = {0};
@@ -439,7 +474,7 @@ void set_room(const float* nb, const int* nl, const float* tris, int nnodes, int
     g_rnn = nnodes;
     upload_reuse(&g_rnb,   &g_rnb_cap,   nb,   (size_t)nnodes*8*sizeof(float));
     upload_reuse(&g_rnl,   &g_rnl_cap,   nl,   (size_t)nnodes*4*sizeof(int));
-    upload_reuse(&g_rtris, &g_rtris_cap, tris, (size_t)ntris*32*sizeof(float));
+    upload_reuse(&g_rtris, &g_rtris_cap, tris, (size_t)ntris*40*sizeof(float));
     printf("[ocl] field BVH uploaded: %d nodes, %d tris (%s)\n",
            nnodes, ntris,
            (g_rnb && g_rnl && g_rtris) ? "OK" : "FAILED");
@@ -453,10 +488,25 @@ void set_sky(const uint32_t* px,int npx,const int* off,const int* w,const int* h
     upload_reuse(&g_skyh,   &g_skyh_cap,   h,   6*sizeof(int));
 }
 
+void set_room_textures(const uint32_t* px,int npix,const int* off,const int* w,const int* h,int ntex){
+    if(!g_ok) return;
+    upload_reuse(&g_ratlas,&g_ratlas_cap,px,(size_t)npix*sizeof(uint32_t));
+    upload_reuse(&g_raoff, &g_raoff_cap, off,(size_t)ntex*sizeof(int));
+    upload_reuse(&g_raw,   &g_raw_cap,   w,  (size_t)ntex*sizeof(int));
+    upload_reuse(&g_rah,   &g_rah_cap,   h,  (size_t)ntex*sizeof(int));
+}
+void set_dynamic_textures(const uint32_t* px,int npix,const int* off,const int* w,const int* h,int ntex){
+    if(!g_ok) return;
+    upload_reuse(&g_datlas,&g_datlas_cap,px,(size_t)npix*sizeof(uint32_t));
+    upload_reuse(&g_daoff, &g_daoff_cap, off,(size_t)ntex*sizeof(int));
+    upload_reuse(&g_daw,   &g_daw_cap,   w,  (size_t)ntex*sizeof(int));
+    upload_reuse(&g_dah,   &g_dah_cap,   h,  (size_t)ntex*sizeof(int));
+}
+
 void set_emissive(const float* tris, int count){
     if(!g_ok) return;
     g_enn = count;
-    upload_reuse(&g_etris, &g_ecap, tris, (size_t)count*32*sizeof(float));
+    upload_reuse(&g_etris, &g_ecap, tris, (size_t)count*40*sizeof(float));
 }
 
 static void upload_reuse(cl_mem* buf, size_t* cap, const void* data, size_t bytes){
@@ -477,7 +527,7 @@ void set_dynamic(const float* nb, const int* nl, const float* tris, int nnodes, 
     g_dnn = nnodes;
     upload_reuse(&g_dnb,   &cap_nb,   nb,   (size_t)nnodes*8*sizeof(float));
     upload_reuse(&g_dnl,   &cap_nl,   nl,   (size_t)nnodes*4*sizeof(int));
-    upload_reuse(&g_dtris, &cap_tris, tris, (size_t)ntris*32*sizeof(float));
+    upload_reuse(&g_dtris, &cap_tris, tris, (size_t)ntris*40*sizeof(float));
 }
 
 void render(float cpx,float cpy,float cpz,
@@ -511,6 +561,14 @@ void render(float cpx,float cpy,float cpz,
     clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_skyoff);
     clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_skyw);
     clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_skyh);
+    clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_ratlas);
+    clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_raoff);
+    clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_raw);
+    clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_rah);
+    clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_datlas);
+    clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_daoff);
+    clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_daw);
+    clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_dah);
     clSetKernelArg(g_kern,a++,sizeof(cl_mem),&g_etris);
     clSetKernelArg(g_kern,a++,sizeof(int),&g_enn);
     clSetKernelArg(g_kern,a++,sizeof(float),&cpx);
@@ -557,6 +615,8 @@ const char* device_name() { return ""; }
 void set_room(const float*, const int*, const float*, int, int) {}
 void set_sky(const uint32_t*, int, const int*, const int*, const int*) {}
 void set_dynamic(const float*, const int*, const float*, int, int) {}
+void set_room_textures(const uint32_t*, int, const int*, const int*, const int*, int) {}
+void set_dynamic_textures(const uint32_t*, int, const int*, const int*, const int*, int) {}
 void set_emissive(const float*, int) {}
 void render(float, float, float, float, float, float, float, float, float,
             float, float, float, float, float, float, float, float,

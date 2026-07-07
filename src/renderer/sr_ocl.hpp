@@ -37,6 +37,15 @@ void set_sky(const uint32_t* pixels, int npx,
 void set_dynamic(const float* node_bounds, const int* node_links,
                  const float* tris, int nnodes, int ntris);
 
+// Upload the texture ATLAS for the static/dynamic BVHs so the kernel can sample
+// object textures (mirrors set_sky: all textures' ARGB pixels concatenated,
+// plus per-texture start offset, width and height). npix = total pixel count,
+// ntex = number of textures (size of off/w/h).
+void set_room_textures(const uint32_t* pixels, int npix,
+                       const int* off, const int* w, const int* h, int ntex);
+void set_dynamic_textures(const uint32_t* pixels, int npix,
+                          const int* off, const int* w, const int* h, int ntex);
+
 // Upload the emissive (area-light) triangles used for Next Event Estimation.
 // Same 32-float/tri layout as flatten(); the kernel reads v0/v1/v2, the face
 // normal and the emission. Pass count==0 to fall back to sun+ambient lighting.

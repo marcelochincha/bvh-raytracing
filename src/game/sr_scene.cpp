@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <unordered_map>
 #include <memory>
 
 #define FIELD_SPHERES 8
@@ -669,11 +670,18 @@ void rebuild_field(Game* e) {
     if (ocl::available()) {
         std::vector<float> nb, tf; std::vector<int> nl;
         if (!e->static_bvh.empty()) {
-            e->static_bvh.flatten(nb, nl, tf);
+            bvh::BVH::GPUAtlas atlas;
+            std::unordered_map<const texture*, int> texmap;
+            e->static_bvh.build_atlas(atlas, texmap);
+            e->static_bvh.flatten(nb, nl, tf, &texmap);
             ocl::set_room(nb.data(), nl.data(), tf.data(),
                           (int)e->static_bvh.node_count(), (int)e->static_bvh.triangle_count());
+            ocl::set_room_textures(atlas.pixels.data(), (int)atlas.pixels.size(),
+                                   atlas.off.data(), atlas.w.data(), atlas.h.data(),
+                                   (int)atlas.off.size());
         } else {
             ocl::set_room(nullptr, nullptr, nullptr, 0, 0);
+            ocl::set_room_textures(nullptr, 0, nullptr, nullptr, nullptr, 0);
         }
         ocl_upload_emissive(*e);
     }
