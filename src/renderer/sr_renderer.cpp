@@ -505,6 +505,9 @@ static bool clip_near_plane(vec4 &a, vec4 &b, float w_min)
 // Cohen-Sutherland region code for 2D viewport clipping.
 static int cs_outcode(float x, float y, int w, int h)
 {
+    // NaN fails every comparison, so without this it would read as "inside"
+    // (outcode 0) and slip an INT_MIN coordinate into draw_line. Flag it out.
+    if (!std::isfinite(x) || !std::isfinite(y)) return 1 | 2 | 4 | 8;
     int c = 0;
     if (x < 0)            c |= 1;
     else if (x >= w)      c |= 2;
@@ -547,6 +550,14 @@ void draw_gizmo_line(framebuffer &fb, const camera &cam, const vec3 &start, cons
     // 2) Perspective divide -> screen.
     vec3 a_scr = convert_to_fb(fb, a / a.w);
     vec3 b_scr = convert_to_fb(fb, b / b.w);
+
+    // 2b) Reject non-finite endpoints. A degenerate/empty AABB (min=+inf,
+    // max=-inf) or a near-zero w can push a coordinate to inf/NaN. Casting
+    // that to int below is UB (yields INT_MIN on x86), which makes the
+    // Bresenham loop in draw_line walk ~2 billion steps and freeze the
+    // frame ("lines rasterized infinitely"). Drop the segment instead.
+    if (!std::isfinite(a_scr.x) || !std::isfinite(a_scr.y) ||
+        !std::isfinite(b_scr.x) || !std::isfinite(b_scr.y)) return;
 
     // 3) Viewport clip (handles off-screen endpoints instead of discarding).
     float x0 = a_scr.x, y0 = a_scr.y, x1 = b_scr.x, y1 = b_scr.y;

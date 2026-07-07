@@ -39,6 +39,7 @@ struct Game {
     float time          = 0.0f;
     bool  raytrace_mode = true;
     bool  show_bvh      = false;
+    int   bvh_debug_depth = 12;  // wireframe: draw only nodes up to this depth
 
     bool show_menu   = false;
     int  menu_cursor = 0;

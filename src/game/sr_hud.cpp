@@ -62,9 +62,15 @@ void draw_bvh_debug(Game* e) {
         0xFFFF4040,0xFFFFA040,0xFFFFFF40,0xFF40FF40,
         0xFF40FFFF,0xFF4080FF,0xFFC040FF,0xFFFF40C0,
     };
+    // Only draw the top levels of the hierarchy. A production scene BVH has
+    // 100k+ nodes; drawing all of them is ~2M lines/frame (~50ms) AND an
+    // unreadable box soup that made toggling the wireframe feel like a freeze.
+    // Capping the depth keeps it to a few thousand boxes: cheap and legible.
+    const int max_depth = e->bvh_debug_depth;
     auto draw_bvh = [&](const bvh::BVH& b) {
         b.debug_nodes(nodes);
         for (const auto& n : nodes) {
+            if (n.depth > max_depth) continue;
             uint32_t col = palette[n.depth % (sizeof(palette)/sizeof(palette[0]))];
             draw_aabb_wire(e->fb, e->cam, n.bounds, col);
         }
