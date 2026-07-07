@@ -85,16 +85,15 @@ Cada rayo consulta ambos y conserva el impacto más cercano; es, en esencia, una
 TLAS de dos instancias hecha a mano en la que la heurística se elige según la
 frecuencia de cambio.
 
-\textbf{Tres backends sobre la misma escena.} Comparamos tres motores de trazado.
-La distinción clave es de quién es el código y qué árbol recorre:
+\textbf{Tres backends sobre la misma escena.} Comparamos tres motores de trazado:
 
 \begin{center}\small
 \setlength{\tabcolsep}{6pt}\renewcommand{\arraystretch}{1.15}
 \begin{tabular}{@{}llll@{}}\toprule
-Backend & Quién lo escribió & Dónde corre & Qué árbol usa \\\midrule
-CPU propio & nosotros (C++)        & CPU, 16 hilos por franjas & \emph{nuestro} BVH \\
-GPU OpenCL & nosotros (\emph{kernel}) & GPU, 1 \emph{work-item}/píxel & \emph{nuestro} BVH (aplanado) \\
-Embree     & Intel (librería)      & CPU, SIMD (AVX) & \emph{su propio} BVH \\
+Backend     & Ejecución           & Arbol \\\midrule
+CPU propio  & CPU                 & BVH propio \\
+GPU OpenCL  & GPU                 & BVH (aplanado) propio \\
+Embree      & CPU                 & Embree optimized BVH \\
 \bottomrule\end{tabular}
 \end{center}
 
@@ -188,10 +187,12 @@ estructura ---una distinción central para un curso de estructuras de datos.
 \textbf{Trabajo futuro}: recorrido SIMD y MBVH propios, construcción paralela,
 \emph{refit} en vez de rebuild para lo dinámico, y comparación con SBVH.
 
-\paragraph{Contribuciones por autor.} \emph{(a completar por el equipo)}
-Kalos Lazo: BVH y heurísticas de construcción; Lenin Chávez: escena, sombreado y
-renderer multihilo; Marcelo Chincha: backend OpenCL/GPU, integración de Embree y
-\emph{benchmark}.
+\paragraph{Contribuciones por autor.} 
+\begin{itemize}\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}\setlength{\topsep}{2pt}
+  \item Kalos Lazo: Integración con embree y \emph{benchmark}.
+  \item Lenin Chávez: escena, sombreado y renderer multihilo.
+  \item Marcelo Chincha: backend OpenCL/GPU, BVH y heurísticas de construcción .
+\end{itemize}
 
 \paragraph{Enlaces.}
 \begin{itemize}\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}\setlength{\topsep}{2pt}

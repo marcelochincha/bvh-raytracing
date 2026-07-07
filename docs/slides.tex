@@ -101,7 +101,7 @@
 \AtBeginSection[]{%
   \begin{frame}[plain,noframenumbering]
     \vfill\centering
-    {\color{mute}\footnotesize\bfseries PARTE \insertsectionnumber}\\[6pt]
+    {\color{mute}\footnotesize\bfseries PARTE \insertsectionnumber}\\[12pt]
     {\color{primdk}\Huge\bfseries \insertsectionhead}\\[10pt]
     {\color{primdk}\rule{0.28\textwidth}{1.6pt}}
     \vfill
@@ -152,7 +152,6 @@
 {\color{mute}\footnotesize\bfseries PROYECTO FINAL \textbullet{} CS3014 \textbullet{} UTEC}\\[14pt]
 {\color{primdk}\Huge\bfseries Ray tracing acelerado con BVH}\\[12pt]
 {\color{primdk}\rule{0.4\textwidth}{1.4pt}}\\[12pt]
-{\color{ink}\large Escenas din\'amicas y comparaci\'on de tres \emph{backends}}\\[3pt]
 {\color{mute}\normalsize BVH propio (CPU) \textbullet{} OpenCL (GPU) \textbullet{} Intel Embree}
 \end{center}
 
@@ -235,7 +234,7 @@ Su viabilidad depende de una \hl{estructura de aceleraci\'on}.
 Sin aceleraci\'on, cada rayo se prueba contra \hl{todos} los tri\'angulos:
 \[
 T_{\text{frame}} \;\approx\; \underbrace{P}_{\text{p\'ixeles}}\cdot
-\underbrace{N}_{\text{tri\'angulos}}\cdot(\text{rayos por p\'ixel})
+\underbrace{N}_{\text{tri\'angulos}}\cdot \hspace{0.3cm} (\text{rayos por p\'ixel})
 \]
 \begin{alertblock}{Orden de magnitud}
 $1280\times720$ con $200\,000$ tri\'angulos $\Rightarrow \sim\!1{,}8\times10^{11}$
@@ -243,7 +242,7 @@ pruebas por frame. Inviable en tiempo real con fuerza bruta $O(P\cdot N)$.
 \end{alertblock}
 \begin{itemize}
   \item Necesitamos \hl{descartar grupos enteros} de tri\'angulos con pruebas baratas.
-  \item $\Rightarrow$ una estructura de aceleraci\'on jer\'arquica: el \alert{BVH}.
+  \item Existe una estructura de aceleraci\'on jer\'arquica: el \alert{BVH}.
 \end{itemize}
 \end{frame}
 
@@ -274,7 +273,7 @@ de construcci\'on conviene para cada una, y qu\'e \emph{hardware} recorre mejor 
 %==============================================================================
 
 \begin{frame}{BVH: la idea}
-\begin{columns}[T]
+\begin{columns}[c]
 \begin{column}{0.54\textwidth}
 \begin{itemize}\itemsep3pt
   \item \'Arbol binario de \hl{cajas alineadas a los ejes} (AABB).
@@ -285,8 +284,8 @@ de construcci\'on conviene para cada una, y qu\'e \emph{hardware} recorre mejor 
 \vspace{3pt}
 \centering Costo por rayo: $O(N)\;\to\;\sim$\hl{$O(\log N)$}.
 \end{column}
-\begin{column}{0.46\textwidth}\centering
-\begin{tikzpicture}[scale=0.72,every node/.style={font=\scriptsize,text=ink},
+\begin{column}{0.54\textwidth}\centering
+\begin{tikzpicture}[scale=1.25,every node/.style={font=\scriptsize,text=ink},
   bx/.style={draw=prim,thick,rounded corners=1pt,fill=panel},
   lf/.style={draw=primlt,thick,rounded corners=1pt,fill=panellt},
   e/.style={-Stealth,thick,primlt}]
@@ -309,7 +308,7 @@ de construcci\'on conviene para cada una, y qu\'e \emph{hardware} recorre mejor 
 \begin{columns}[T]
 \begin{column}{0.5\textwidth}
 \textbf{Rayo\,--\,AABB (\emph{slabs}).} Una caja $=$ 3 bandas (X, Y, Z). El rayo
-entra sii el intervalo de entrada no supera al de salida:
+entra si el intervalo de entrada no supera al de salida:
 \[
 t_{\min}=\max(\text{ent.})\le t_{\max}=\min(\text{sal.})
 \]
@@ -325,12 +324,12 @@ $(t,u,v)$ de $\vecm{O}+t\vecm{D}=\vecm{v_0}+u\,\vecm{e_1}+v\,\vecm{e_2}$.
 \end{itemize}
 \end{column}
 \end{columns}
-\vspace{3pt}
+\vspace{12pt}
 \centering\footnotesize\textcolor{mute}{Ambas son $O(1)$: el BVH sirve para \emph{invocarlas pocas veces}, no para abaratarlas.}
 \end{frame}
 
 \begin{frame}{Construcci\'on \emph{top-down} y las tres heur\'isticas}
-\begin{columns}[T]
+\begin{columns}[c]
 \begin{column}{0.44\textwidth}
 \small Con todos los tri\'angulos en la ra\'iz, mientras un nodo tenga
 $>$ hoja m\'inima:
@@ -362,14 +361,14 @@ $\propto$ \'area(hijo)/\'area(padre). El costo esperado de un corte es:
 \[
 C_{\text{split}} = 1 + \frac{A_L\,n_L + A_R\,n_R}{A_{\text{padre}}}
 \]
-\begin{columns}[T]
+\begin{columns}[c]
 \begin{column}{0.52\textwidth}
 \textbf{Binning}: en vez de probar los $O(N)$ cortes posibles, se agrupan los
 centroides en \alert{12 cubos} y se eval\'uan 11 cortes $\Rightarrow$ build
 $O(N\log N)$, cercano al \'optimo.
 \end{column}
 \begin{column}{0.48\textwidth}\centering
-\begin{tikzpicture}[scale=0.62,every node/.style={font=\scriptsize,text=ink}]
+\begin{tikzpicture}[scale=1.0,every node/.style={font=\scriptsize,text=ink}]
   \foreach \i in {0,...,11}{\draw[rule,fill=panel] (\i*0.5,0) rectangle (\i*0.5+0.5,0.7);}
   \foreach \i/\h in {1/0.5,2/0.6,3/0.35,7/0.2,8/0.55,9/0.65,10/0.45}{
     \fill[prim] (\i*0.5,0) rectangle (\i*0.5+0.5,\h);}
@@ -381,7 +380,7 @@ $O(N\log N)$, cercano al \'optimo.
 \end{frame}
 
 \begin{frame}{Median split: partir por la mitad de los centroides}
-\begin{columns}[T]
+\begin{columns}[c]
 \begin{column}{0.56\textwidth}
 \textbf{Intuici\'on:} dejar \hl{la misma cantidad} de tri\'angulos a cada lado.
 \begin{enumerate}\itemsep2pt
@@ -390,13 +389,12 @@ $O(N\log N)$, cercano al \'optimo.
         centroide menor en ese eje.
   \item Corte en el \hl{\'indice medio} (mitad/mitad).
 \end{enumerate}
-\vspace{2pt}
-\footnotesize\textcolor{mute}{Build $O(N)$ por nivel. Ignora el \emph{tama\~no} de
-las cajas y el espacio vac\'io $\Rightarrow$ hijos que se solapan $\Rightarrow$
-traversal peor que SAH.}
+% \footnotesize\textcolor{mute}{Build $O(N)$ por nivel. Ignora el \emph{tama\~no} de
+% las cajas y el espacio vac\'io $\Rightarrow$ hijos que se solapan $\Rightarrow$
+% traversal peor que SAH.}
 \end{column}
 \begin{column}{0.44\textwidth}\centering
-\begin{tikzpicture}[scale=0.9,every node/.style={font=\scriptsize,text=ink}]
+\begin{tikzpicture}[scale=1.25,every node/.style={font=\scriptsize,text=ink}]
   \foreach \x in {0.2,0.5,0.9,1.5,2.0,2.3,2.9,3.4}{\fill[prim] (\x,0) circle (2pt);}
   \draw[thick,primdk,dashed] (2.15,-0.3)--(2.15,0.6);
   \node[primdk] at (2.15,0.85) {mediana};
@@ -409,7 +407,7 @@ traversal peor que SAH.}
 \end{frame}
 
 \begin{frame}{Morton / LBVH: ordenar por una curva que llena el espacio}
-\begin{columns}[T]
+\begin{columns}[c]
 \begin{column}{0.54\textwidth}
 \textbf{Intuici\'on:} recorrer el espacio 3D con la \hl{curva Z}, de modo que
 tri\'angulos \emph{vecinos} queden \emph{contiguos} en un arreglo; luego partir por
@@ -420,18 +418,18 @@ la mitad del \'indice.
         ($\dots x_1y_1z_1x_0y_0z_0$).
   \item \hl{Ordenar} una vez por ese c\'odigo y cortar por el \'indice medio.
 \end{enumerate}
-\vspace{2pt}
-\footnotesize\textcolor{mute}{Build rapid\'isimo (domina el \emph{sort}); los cortes
-por \'indice ignoran \'area y solapamiento $\Rightarrow$ \'arbol mediocre. Es la base
-de los constructores de BVH en GPU.}
+% \vspace{2pt}
+% \footnotesize\textcolor{mute}{Build rapid\'isimo (domina el \emph{sort}); los cortes
+% por \'indice ignoran \'area y solapamiento $\Rightarrow$ \'arbol mediocre. Es la base
+% de los constructores de BVH en GPU.}
 \end{column}
 \begin{column}{0.46\textwidth}\centering
-\begin{tikzpicture}[scale=0.62,every node/.style={font=\tiny,text=ink}]
+\begin{tikzpicture}[scale=2.,every node/.style={font=\tiny,text=ink}]
   \foreach \x in {0,1,2,3}\foreach \y in {0,1,2,3}{\fill[rule] (\x*0.7,\y*0.7) circle (1.4pt);}
   \draw[very thick,prim]
     (0,0)--(0.7,0)--(0,0.7)--(0.7,0.7)--(1.4,0)--(2.1,0)--(1.4,0.7)--(2.1,0.7)--
     (0,1.4)--(0.7,1.4)--(0,2.1)--(0.7,2.1)--(1.4,1.4)--(2.1,1.4)--(1.4,2.1)--(2.1,2.1);
-  \node[primdk] at (1.05,-0.5) {curva Z (orden Morton)};
+  \node[primdk] at (1.05,-0.5) {Curva Z (orden Morton)};
 \end{tikzpicture}
 \end{column}
 \end{columns}
@@ -449,19 +447,22 @@ de los constructores de BVH en GPU.}
 \end{column}
 \begin{column}{0.5\textwidth}
 \begin{lstlisting}
-stack.push(raiz);
-while (pila no vacia) {
-  nodo = pop();
-  if (!aabb_hit(nodo.box, inv, best))
-      continue;               // poda
-  if (es_hoja) test_tris(nodo);
-  else         push(hijos);
+stack.push(root);
+while (!stack.empty()) {
+  node = pop();
+  if(!aabb_hit(node.box, r, inv, best))
+      continue; // poda
+  
+  if(is_leaf(node)) 
+      test_tris(node); //O(#tris(node))
+  else
+      push(children(node));
 }
 \end{lstlisting}
 \end{column}
 \end{columns}
-\vspace{2pt}
-\centering\small La misma rutina, con una pila expl\'icita, es la que luego portamos a la GPU.
+% \vspace{2pt}
+% \centering\small La misma rutina, con una pila expl\'icita, es la que luego portamos a la GPU.
 \end{frame}
 
 \begin{frame}{Nuestra combinaci\'on: dos BVH (est\'atico $+$ din\'amico)}
@@ -483,9 +484,9 @@ while (pila no vacia) {
 \end{exampleblock}
 \end{column}
 \end{columns}
-\vspace{5pt}
-\centering\small Cada rayo consulta \hl{ambos} \'arboles y se queda con el golpe m\'as cercano.\\[2pt]
-\footnotesize\textcolor{mute}{Es una TLAS de dos instancias hecha a mano: la heur\'istica se elige seg\'un la frecuencia de cambio.}
+% \vspace{5pt}
+% \centering\small Cada rayo consulta \hl{ambos} \'arboles y se queda con el golpe m\'as cercano.\\[2pt]
+% \footnotesize\textcolor{mute}{Es una TLAS de dos instancias hecha a mano: la heur\'istica se elige seg\'un la frecuencia de cambio.}
 \end{frame}
 
 %==============================================================================
@@ -517,27 +518,26 @@ while (pila no vacia) {
 \begin{table}\centering\small
 \renewcommand{\arraystretch}{1.5}
 \setlength{\tabcolsep}{6pt}
-\begin{tabular}{@{}l l l l@{}}
+\begin{tabular}{@{}l l l@{}}
 \toprule
-\textbf{Backend} & \textbf{Qui\'en lo escribi\'o} & \textbf{D\'onde corre} & \textbf{Qu\'e \'arbol usa} \\
-\midrule
-\hl{CPU propio} & Nosotros (C++)        & CPU, 16 hilos      & \textbf{nuestro} BVH \\
-\hl{GPU OpenCL} & Nosotros (\emph{kernel}) & GPU, 1 hilo/p\'ixel & \textbf{nuestro} (aplanado) \\
+Backend     & Ejecución           & Arbol \\\midrule
+CPU propio  & CPU                 & BVH propio \\
+GPU OpenCL  & GPU                 & BVH (aplanado) propio \\
 \rowcolor{panellt}
-\textbf{Embree} & Intel (librer\'ia)    & CPU, SIMD (AVX)    & \textbf{su propio} BVH \\
+Embree      & CPU                 & Embree optimized BVH \\
 \bottomrule
 \end{tabular}
 \end{table}
 \vspace{2pt}
 \begin{itemize}\itemsep1pt
-  \item CPU y GPU son \hl{el mismo raytracer nuestro}: cambia solo el hardware que recorre \emph{nuestro} \'arbol.
-  \item Embree es la \hl{referencia industrial} (no es c\'odigo nuestro): arma y recorre su propio \'arbol.
+  % \item CPU y GPU son \hl{el mismo raytracer nuestro}: cambia solo el hardware que recorre \emph{nuestro} \'arbol.
+  % }item Embree es la \hl{referencia industrial} (no es c\'odigo nuestro): arma y recorre su propio \'arbol.
   \item Los tres son \hl{ray tracing por software}: ninguno usa n\'ucleos RT dedicados.
 \end{itemize}
 \end{frame}
 
 \begin{frame}[fragile]{GPU: por qu\'e el algoritmo cambia (\emph{flatten})}
-\begin{columns}[T]
+\begin{columns}[c]
 \begin{column}{0.5\textwidth}
 \small La GPU \hl{no es un CPU r\'apido}: sin punteros de host ni recursi\'on.
 Hay que \hl{aplanar} el \'arbol a arrays paralelos:
@@ -559,20 +559,20 @@ while(sp>0){
 \end{lstlisting}
 \end{column}
 \end{columns}
-\vspace{4pt}
+\vspace{16pt}
 El kernel recorre con una \hl{pila expl\'icita}; modelo \hl{SIMT}: un
 \emph{work-item} por p\'ixel (grupos $8\times8$, rayos vecinos comparten cach\'e).
 \end{frame}
 
 \begin{frame}{Embree: qu\'e hace con el BVH}
-\begin{columns}[T]
+\begin{columns}[c]
 \begin{column}{0.54\textwidth}
 \begin{itemize}\itemsep3pt
   \item \hl{MBVH}: nodos de \hl{4\,--\,8 v\'ias} (no binario) $\Rightarrow$ menos niveles.
   \item \hl{SIMD}: con una instrucci\'on AVX prueba \hl{varias cajas a la vez}.
   \item \hl{Layout} compacto y nodos cuantizados $\Rightarrow$ menos fallos de cach\'e.
-  \item Calidad de build seleccionable: \texttt{HIGH} (SBVH) / \texttt{MEDIUM} / \texttt{LOW},
-        que mapeamos a SAH / Median / Morton.
+  % \item Calidad de build seleccionable: \texttt{HIGH} (SBVH) / \texttt{MEDIUM} / \texttt{LOW},
+  %       que mapeamos a SAH / Median / Morton.
 \end{itemize}
 \end{column}
 \begin{column}{0.46\textwidth}
@@ -590,32 +590,33 @@ El kernel recorre con una \hl{pila expl\'icita}; modelo \hl{SIMT}: un
 \section{Resultados}
 %==============================================================================
 
-\begin{frame}{Setup experimental}
-\begin{columns}[T]
-\begin{column}{0.5\textwidth}
+\begin{frame}{Setup experimental: Plataforma y Escena}
 \textbf{Plataforma}
-\begin{itemize}\itemsep1pt
+\begin{itemize}
   \item CPU: \hl{AMD Ryzen 7 5700X3D} (8 n\'ucleos, 16 hilos).
   \item GPU: \hl{NVIDIA GTX 1650 SUPER} (OpenCL).
   \item Referencia: \alert{Intel Embree 4}.
 \end{itemize}
-\vspace{3pt}
+
+\vspace{1.5em}
+
 \textbf{Escena:} campo de esferas (densidad variable):
-\begin{itemize}\itemsep1pt
-  \item Small \hl{12\,812} \textbullet{} Medium \hl{51\,212} \textbullet{} Large \hl{204\,812} tri.
+\begin{itemize}
+  \item Small \hl{12\,812} tri.
+  \item Medium \hl{51\,212} tri.
+  \item Large \hl{204\,812} tri.
 \end{itemize}
-\end{column}
-\begin{column}{0.5\textwidth}
+\end{frame}
+
+\begin{frame}{Setup experimental: Metodolog\'ia}
 \textbf{Metodolog\'ia} (reproducible: \texttt{-{}-bench})
-\begin{itemize}\itemsep1pt
+\begin{itemize}
   \item 3 frames de \emph{warmup} $+$ promedio de 10.
   \item \hl{render/frame}: frame completo (CPU y GPU).
   \item \hl{traversal}: rayos primarios, 1 hilo (CPU y Embree).
   \item \alert{nodos/rayo}: calidad del \'arbol, \emph{independiente del hardware}.
 \end{itemize}
-\end{column}
-\end{columns}
-\vspace{2pt}
+\vspace{1.5em}
 \centering\footnotesize\textcolor{mute}{Matriz completa: 3 backends $\times$ 3 heur\'isticas $\times$ 3 tama\~nos.}
 \end{frame}
 
@@ -761,18 +762,20 @@ El kernel recorre con una \hl{pila expl\'icita}; modelo \hl{SIMT}: un
 
 \begin{frame}{Demo en vivo}
 \begin{center}
-\begin{tikzpicture}
-  \node[draw=prim,thick,rounded corners=4pt,fill=panel,minimum width=9cm,minimum height=2.8cm,align=center,text=ink] {%
-    \Large \color{primdk}\bfseries Ray tracer en tiempo real\\[6pt]
-    \normalsize\color{ink} \texttt{./bvh\_raytracer -{}-width 640 -{}-height 480}\\[4pt]};
-\end{tikzpicture}
+  \includegraphics[width=0.8\textwidth]{fig_git.png}
 \end{center}
-\vspace{4pt}
-\begin{itemize}
-  \item Cambiar entre \hl{CPU / GPU / Embree} en vivo y ver el cambio de FPS (\texttt{G}).
-  \item Comparar BVH vs fuerza bruta $O(N)$ (\texttt{B}).
-  \item Visualizar las cajas del \'arbol y una escena din\'amica con personaje animado.
-\end{itemize}
+% \begin{tikzpicture}
+%   \node[draw=prim,thick,rounded corners=4pt,fill=panel,minimum width=9cm,minimum height=2.8cm,align=center,text=ink] {%
+%     \Large \color{primdk}\bfseries Ray tracer en tiempo real\\[6pt]
+%     \normalsize\color{ink} \texttt{./bvh\_raytracer -{}-width 640 -{}-height 480}\\[4pt]};
+% \end{tikzpicture}
+% \end{center}
+% \vspace{4pt}
+% \begin{itemize}
+%   \item Cambiar entre \hl{CPU / GPU / Embree} en vivo y ver el cambio de FPS (\texttt{G}).
+%   \item Comparar BVH vs fuerza bruta $O(N)$ (\texttt{B}).
+%   \item Visualizar las cajas del \'arbol y una escena din\'amica con personaje animado.
+% \end{itemize}
 \end{frame}
 
 \begin{frame}{Conclusiones}
