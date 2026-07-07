@@ -384,6 +384,47 @@ bool BVH::occluded(const vec3& origin, const vec3& dir, float max_t) const {
     return false;
 }
 
+bool BVH::intersect_debug(const vec3& origin, const vec3& dir, Hit& out,
+                          std::vector<VisitedNode>& visited) const {
+    if (nodes_.empty()) return false;
+
+    vec3 inv(1.0f / dir.x, 1.0f / dir.y, 1.0f / dir.z);
+    float best = out.t;
+    int   best_tri = -1;
+    int   order = (int)visited.size();
+
+    int stack[64];
+    int sp = 0;
+    stack[sp++] = 0;
+
+    while (sp > 0) {
+        const Node& n = nodes_[stack[--sp]];
+        float t_near;
+        bool box_hit = aabb_hit(n.bounds, origin, inv, best, t_near);
+        bool leaf    = (n.left < 0);
+        visited.push_back({ n.bounds, leaf, box_hit, order++ });
+        if (!box_hit) continue; // subtree pruned — the demo highlights these
+
+        if (leaf) {
+            for (int i = n.start; i < n.start + n.count; ++i) {
+                float t;
+                if (tri_hit(tris_[i], origin, dir, t) && t < best) {
+                    best = t;
+                    best_tri = i;
+                }
+            }
+        } else if (sp + 2 <= 64) {
+            stack[sp++] = n.left;
+            stack[sp++] = n.right;
+        }
+    }
+
+    if (best_tri < 0) return false;
+    out.t = best;
+    out.tri = best_tri;
+    return true;
+}
+
 // ---- GPU flattening --------------------------------------------------------
 
 void BVH::flatten(std::vector<float>& nb, std::vector<int>& nl,
@@ -400,7 +441,7 @@ void BVH::flatten(std::vector<float>& nb, std::vector<int>& nl,
     //  [0-2]  v0          [3-5]  v1         [6-8]  v2
     //  [9-11] face normal [12-14] albedo
     //  [15] roughness  [16] metallic  [17] ior  [18] smooth  [19] pad
-    //  [20-22] n0  [23-25] n1  [26-28] n2  [29-31] pad
+    //  [20-22] n0  [23-25] n1  [26-28] n2  [29-31] emission
     tf.resize(tris_.size() * 32);
     for (std::size_t i = 0; i < tris_.size(); ++i) {
         const Tri& t = tris_[i];
@@ -418,7 +459,7 @@ void BVH::flatten(std::vector<float>& nb, std::vector<int>& nl,
         p[20]=t.n0.x; p[21]=t.n0.y; p[22]=t.n0.z;
         p[23]=t.n1.x; p[24]=t.n1.y; p[25]=t.n1.z;
         p[26]=t.n2.x; p[27]=t.n2.y; p[28]=t.n2.z;
-        p[29]=0.0f; p[30]=0.0f; p[31]=0.0f;
+        p[29]=t.emission.x; p[30]=t.emission.y; p[31]=t.emission.z;
     }
 }
 

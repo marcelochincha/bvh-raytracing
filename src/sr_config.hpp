@@ -23,6 +23,7 @@ struct config
     bool debug_mode;
     bool bench;
     bool demo;
+    int  num_workers; // CPU render threads; -1 = all hardware threads
 
     config()
         : window_width(W_WIDTH),
@@ -31,7 +32,8 @@ struct config
           audio_rate(AUDIO_RATE),
           debug_mode(DEBUG),
           bench(false),
-          demo(false)
+          demo(false),
+          num_workers(-1)
     {
     }
 };
@@ -43,6 +45,7 @@ inline void print_help()
     printf("  --height <pixels>       Window height (default: 200)\n");
     printf("  --fps <value>           Target FPS (default: 60.0)\n");
     printf("  --audio-rate <hz>       Audio sample rate (default: 16384)\n");
+    printf("  --threads <n>           CPU render threads (default: 4, -1 = all cores)\n");
     printf("  --debug                 Enable debug mode\n");
     printf("  --help                  Show this help\n");
     printf("\nExample: sr_lec.exe --width 320 --height 200  --fps 60\n");
@@ -69,6 +72,10 @@ inline config parse_args(int argc, char* argv[])
         else if (strcmp(argv[i], "--audio-rate") == 0 && i + 1 < argc)
         {
             cfg.audio_rate = atoi(argv[++i]);
+        }
+        else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc)
+        {
+            cfg.num_workers = atoi(argv[++i]);
         }
         else if (strcmp(argv[i], "--debug") == 0)
         {

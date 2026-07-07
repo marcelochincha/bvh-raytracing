@@ -44,6 +44,7 @@ int main(int argc, char *argv[])
 
     init_sdl();
     sound_init(global_config.audio_rate);
+    sound_set_music_volume(0.5f);
     Game *game = game_create(global_config.window_width, global_config.window_height);
     game_init(game);
 

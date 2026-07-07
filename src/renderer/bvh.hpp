@@ -104,6 +104,17 @@ public:
     struct DebugNode { AABB bounds; int depth; bool leaf; };
     void debug_nodes(std::vector<DebugNode>& out) const;
 
+    // Trace one ray like intersect(), but ALSO record every node the traversal
+    // pops off the stack, flagging whether the ray's box test passed (so it
+    // descended) or failed (so the whole subtree was pruned). This is the data
+    // behind the "ray path" demo: it shows the sequence of boxes a ray walks and
+    // WHY it discards subtrees. Much slower than intersect() (it appends to a
+    // vector) — meant for a handful of debug rays, never the render loop.
+    // `visited` is appended to, not cleared, so several BVHs can share one list.
+    struct VisitedNode { AABB bounds; bool leaf; bool box_hit; int order; };
+    bool intersect_debug(const vec3& origin, const vec3& dir, Hit& out,
+                         std::vector<VisitedNode>& visited) const;
+
 private:
     struct Node {
         AABB bounds;

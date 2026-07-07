@@ -1,7 +1,9 @@
 #include <game/sr_raytrace.hpp>
 #include <renderer/sr_texture.hpp>
+#include <renderer/sr_ocl.hpp>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 const vec3  SUN_DIR    = normalize(vec3(-0.3f, 1.0f, -0.2f));
 const float AMBIENT    = 0.15f;
@@ -275,6 +277,69 @@ vec3 trace_ray(const ray& r, const Game& e) {
     return trace_ray(r, e, 0, seed);
 }
 
+void ocl_upload_emissive(const Game& e) {
+    if (!ocl::available()) return;
+    // Same 32-float record as BVH::flatten; the kernel only reads v0/v1/v2, the
+    // face normal and the emission, so the remaining slots stay zero.
+    const auto& tris = e.emissive_tris;
+    std::vector<float> tf(tris.size() * 32, 0.0f);
+    for (std::size_t i = 0; i < tris.size(); ++i) {
+        const bvh::Tri& t = tris[i];
+        float* p = &tf[i * 32];
+        p[0]=t.v0.x;      p[1]=t.v0.y;      p[2]=t.v0.z;
+        p[3]=t.v1.x;      p[4]=t.v1.y;      p[5]=t.v1.z;
+        p[6]=t.v2.x;      p[7]=t.v2.y;      p[8]=t.v2.z;
+        p[9]=t.normal.x;  p[10]=t.normal.y; p[11]=t.normal.z;
+        p[29]=t.emission.x; p[30]=t.emission.y; p[31]=t.emission.z;
+    }
+    ocl::set_emissive(tf.data(), (int)tris.size());
+}
+
+void cast_debug_ray(Game& e) {
+    e.ray_debug.path.clear();
+    e.ray_debug.visited.clear();
+    e.ray_debug.active = true;
+
+    vec3 origin = e.cam._position;
+    vec3 dir    = get_ray_direction(e.cam, e.fb.width / 2, e.fb.height / 2,
+                                    e.fb.width, e.fb.height);
+    e.ray_debug.path.push_back(origin);
+
+    // Follow the ray through a few mirror bounces. Each segment queries BOTH CPU
+    // BVHs with intersect_debug, so every box tested is recorded into the shared
+    // `visited` list; the static tree is clamped to the dynamic hit so its
+    // pruning matches what a real closest-hit traversal would do.
+    const int   MAX_SEG = 4;
+    const float SURF_EPS = 1e-3f;
+    for (int seg = 0; seg < MAX_SEG; ++seg) {
+        float           best = 1e30f;
+        const bvh::Tri* tri  = nullptr;
+
+        bvh::Hit hd; hd.t = best;
+        if (!e.dynamic_bvh.empty() &&
+            e.dynamic_bvh.intersect_debug(origin, dir, hd, e.ray_debug.visited)) {
+            best = hd.t; tri = &e.dynamic_bvh.tri(hd.tri);
+        }
+        bvh::Hit hs; hs.t = best;
+        if (!e.static_bvh.empty() &&
+            e.static_bvh.intersect_debug(origin, dir, hs, e.ray_debug.visited)) {
+            best = hs.t; tri = &e.static_bvh.tri(hs.tri);
+        }
+
+        if (!tri) { // miss: draw the ray flying off into the distance, then stop
+            e.ray_debug.path.push_back(origin + dir * 100.0f);
+            break;
+        }
+
+        vec3 P = origin + dir * best;
+        e.ray_debug.path.push_back(P);
+
+        vec3 N = dot(tri->normal, dir) < 0.0f ? tri->normal : -tri->normal;
+        dir    = normalize(dir - N * (2.0f * dot(dir, N))); // mirror reflection
+        origin = P + N * SURF_EPS;
+    }
+}
+
 int worker_thread(void* data) {
     thread_data* td = (thread_data*)data;
     Game* e = td->game;
@@ -286,9 +351,9 @@ int worker_thread(void* data) {
 
         bvh::reset_thread_node_visits();
 
-        int stripe  = e->fb.height / Game::NUM_WORKERS;
+        int stripe  = e->fb.height / e->num_workers;
         int y_start = stripe * id;
-        int y_end   = (id == Game::NUM_WORKERS - 1) ? e->fb.height : stripe * (id + 1);
+        int y_end   = (id == e->num_workers - 1) ? e->fb.height : stripe * (id + 1);
 
         int spp = e->spp;
         for (int y = y_start; y < y_end; ++y)

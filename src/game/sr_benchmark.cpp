@@ -14,10 +14,10 @@ static FrameMeas bench_frame(Game* e) {
     build_scene_tris(e);
     e->cam.rotation();
     uint64_t t0 = SDL_GetPerformanceCounter();
-    for (int i = 0; i < Game::NUM_WORKERS; ++i) SDL_SemPost(e->start_sems[i]);
-    for (int i = 0; i < Game::NUM_WORKERS; ++i) SDL_SemWait(e->done_sem);
+    for (int i = 0; i < e->num_workers; ++i) SDL_SemPost(e->start_sems[i]);
+    for (int i = 0; i < e->num_workers; ++i) SDL_SemWait(e->done_sem);
     long nodes = 0;
-    for (int i = 0; i < Game::NUM_WORKERS; ++i) nodes += e->worker_args[i].visits;
+    for (int i = 0; i < e->num_workers; ++i) nodes += e->worker_args[i].visits;
     double ms = (SDL_GetPerformanceCounter()-t0)*1000.0/SDL_GetPerformanceFrequency();
     return { ms, nodes };
 }

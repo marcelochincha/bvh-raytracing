@@ -37,15 +37,24 @@ void set_sky(const uint32_t* pixels, int npx,
 void set_dynamic(const float* node_bounds, const int* node_links,
                  const float* tris, int nnodes, int ntris);
 
+// Upload the emissive (area-light) triangles used for Next Event Estimation.
+// Same 32-float/tri layout as flatten(); the kernel reads v0/v1/v2, the face
+// normal and the emission. Pass count==0 to fall back to sun+ambient lighting.
+void set_emissive(const float* tris, int count);
+
 // Trace the whole frame on the GPU and read the colors back into `out`
 // (W*H ARGB8888). Camera basis is precomputed host-side: ax/ay/az are the
 // camera X/Y/-Z axes in world space; tb=tan(fovx/2), ta=tb/aspect.
+// `spp` = samples per pixel, `skybox` (0/1) toggles cubemap vs flat-ambient
+// background, `reflections` (0/1) gates the specular bounce — mirroring the
+// same knobs on the CPU trace_ray path.
 void render(float cpx, float cpy, float cpz,
             float axx, float axy, float axz,
             float ayx, float ayy, float ayz,
             float azx, float azy, float azz,
             float tb, float ta,
             float sunx, float suny, float sunz,
+            int spp, int skybox, int reflections,
             int W, int H, uint32_t* out);
 
 } // namespace ocl

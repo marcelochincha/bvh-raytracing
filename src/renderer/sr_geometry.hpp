@@ -9,6 +9,8 @@
 #include <iostream>
 #include <sstream>
 
+struct texture; // fwd
+
 struct vertex
 {
     vec3 p;
@@ -36,6 +38,17 @@ struct mesh
     // Mesh data
     std::vector<vertex> vertices;
     std::vector<triangle> faces;
+
+    // Parallel to `vertices`: the source OBJ 'v' index each vertex came from.
+    // Only filled by the mesh OBJ loader / skinned-mesh builder. Lets external
+    // per-OBJ-vertex data (e.g. a skin binding) map onto the deduplicated
+    // vertex list by index instead of by position. Empty for non-OBJ meshes.
+    std::vector<uint32_t> src_vertex;
+
+    // Optional diffuse texture (borrowed, not owned). When set, the ray tracer's
+    // dynamic path (build_scene_tris) samples it via the per-vertex UVs in
+    // `vertices[].t` instead of a flat albedo. Null = untextured.
+    const texture* tex = nullptr;
 
     // Model transformation
     mutable mat4 _modelMatrix = mat4(1.0f);

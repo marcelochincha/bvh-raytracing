@@ -1,4 +1,5 @@
 #include <game/sr_scene.hpp>
+#include <game/sr_raytrace.hpp>
 #include <renderer/sr_ocl.hpp>
 #include <renderer/sr_texture.hpp>
 #include <algorithm>
@@ -79,6 +80,21 @@ static void add_box_c(std::vector<bvh::Tri>& out, const vec3& center, const vec3
                       const vec3& albedo, float roughness,
                       float metallic = 0.0f, float ior = 1.5f) {
     add_box(out, center - half, center + half, albedo, roughness, metallic, ior);
+}
+
+// Places the free camera at a fixed starting pose so every scene frames its
+// subject on load, instead of leaving the camera wherever the previous scene
+// left it (which forces a manual fly-around each time). `pos` looks at `target`
+// using the same forward convention as euler_deg_looking_at / gameplay look.
+static void set_start_view(Game* e, const vec3& pos, const vec3& target) {
+    vec3 d = normalize(target - pos);
+    float pitch = std::asin(std::clamp(d.y, -1.0f, 1.0f));
+    float yaw   = std::atan2(d.x, -d.z);
+    e->position = pos;
+    e->pitch    = pitch;
+    e->yaw      = yaw;
+    e->cam.setPosition(pos);
+    e->cam.setRotation(vec3(pitch, yaw, 0.0f));
 }
 
 static void add_humanoid(std::vector<bvh::Tri>& out, const vec3& base,
@@ -343,6 +359,7 @@ static void build_field(Game* e) {
             add_sphere(tris, vec3(px,r,pz), r, alb, 0.2f+urand()*0.6f, 0.0f, 1.5f, FIELD_SLICES, FIELD_STACKS);
         }
     add_box(tris, vec3(-10.f,-0.02f,-10.f), vec3(10.f,0.f,10.f), vec3(0.14f,0.14f,0.15f), 0.8f);
+    set_start_view(e, vec3(0.0f, 5.0f, 13.0f), vec3(0.0f, 1.0f, 0.0f));
     rebuild_field_mesh(e, tris);
     e->static_bvh.build(std::move(tris), e->build_strategy);
     std::cout << "Field: " << count << " spheres, " << e->static_bvh.triangle_count()
@@ -421,6 +438,8 @@ static void build_city(Game* e) {
     }
     const float hs = CITY_SPAN * 0.5f + 5.f;
     add_box(tris, vec3(-hs,-0.02f,-hs), vec3(hs,0.f,hs), vec3(0.14f,0.14f,0.15f), 0.8f);
+    // Stand on the clear central avenue looking toward the sculpture at origin.
+    set_start_view(e, vec3(0.0f, 2.5f, CITY_SPAN * 0.4f), vec3(0.0f, 2.0f, 0.0f));
     rebuild_field_mesh(e, tris);
     e->static_bvh.build(std::move(tris), e->build_strategy);
     std::cout << "City: " << grid << "x" << grid << " grid, " << built
@@ -440,6 +459,7 @@ static void build_pbr_test(Game* e) {
     for (int i = 0; i < N; ++i)
         add_sphere(tris, vec3(x0+i*step,radius,0.0f), radius, orange, 0.3f, (float)i/(N-1), 1.5f, PBR_SLICES, PBR_STACKS, true);
     add_box(tris, vec3(-6.f,-0.02f,-6.f), vec3(6.f,0.f,6.f), vec3(0.14f,0.14f,0.15f), 0.8f);
+    set_start_view(e, vec3(0.0f, 1.2f, 4.5f), vec3(0.0f, 0.45f, -1.0f));
     rebuild_field_mesh(e, tris);
     e->static_bvh.build(std::move(tris), e->build_strategy);
     std::cout << "PBR test: " << e->static_bvh.triangle_count() << " tris\n";
@@ -451,12 +471,18 @@ void build_scene_tris(Game* e) {
         const mesh& m = *mp;
         mat4 model = m.modelMatrix();
         vec3 albedo = color_from_hash(name);
+        float rough = 1.0f - (float)e->reflectivity_map[name];
         for (const triangle& tri : m.faces) {
-            vec3 v0 = vec3(model * m.vertices[tri.v0].p);
-            vec3 v1 = vec3(model * m.vertices[tri.v1].p);
-            vec3 v2 = vec3(model * m.vertices[tri.v2].p);
+            const vertex& a = m.vertices[tri.v0];
+            const vertex& b = m.vertices[tri.v1];
+            const vertex& c = m.vertices[tri.v2];
+            vec3 v0 = vec3(model * a.p);
+            vec3 v1 = vec3(model * b.p);
+            vec3 v2 = vec3(model * c.p);
             vec3 n  = normalize(cross(v1-v0, v2-v0));
-            e->rt_tris.push_back({v0,v1,v2, n, albedo, 1.0f-(float)e->reflectivity_map[name]});
+            bvh::Tri t{ v0, v1, v2, n, albedo, rough };
+            if (m.tex) { t.tex = m.tex; t.uv0 = a.t; t.uv1 = b.t; t.uv2 = c.t; }
+            e->rt_tris.push_back(t);
         }
     }
     for (const auto& p : e->peds)
@@ -469,23 +495,164 @@ static void build_cornell_box(Game* e) {
     std::vector<bvh::Tri> tris;
     load_obj("res/cornell/CornellBox-Original.obj", vec3(0.0f, 1.5f, 0.0f), 3.0f,
              vec3(0.75f, 0.70f, 0.68f), 0.85f, tris);
+    // Look into the open face of the box from the front.
+    set_start_view(e, vec3(0.0f, 3.5f, 11.0f), vec3(0.0f, 3.5f, 0.0f));
     rebuild_field_mesh(e, tris);
     e->static_bvh.build(std::move(tris), e->build_strategy);
     std::cout << "Cornell box: " << e->static_bvh.triangle_count() << " tris\n";
 }
 
+// -----------------------------------------------------------------------------
+// Character scene: a skinned OBJ mesh animated by baked skinning matrices, plus
+// a camera path. The mesh is registered in e->meshes so its per-frame deformed
+// triangles feed the DYNAMIC BVH (rebuilt every frame). Data comes from Blender
+// exports if present (res/anim/*), otherwise a procedural fallback is generated
+// so the scene still animates out of the box.
+//
+//   res/anim/character.obj            OBJ rigged in Blender (bind pose)
+//   res/anim/character.skin.weights   binding: bones/verts + one bone per 'v'
+//   res/anim/character.skin.anim      fps/bones/frames + F*B skinning matrices
+//   res/anim/camera.camanim           optional camera keyframes (see loader)
+// -----------------------------------------------------------------------------
+static bool load_cam_anim(const std::string& path,
+                          std::vector<Game::CamKey>& keys, float& fps,
+                          std::string& music) {
+    std::ifstream in(path);
+    if (!in) return false;
+    keys.clear();
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream ss(line);
+        std::string tok; ss >> tok;
+        if (tok == "fps")   { ss >> fps; continue; }
+        if (tok == "music") { std::getline(ss >> std::ws, music); continue; }
+        // Otherwise the first token was px; parse the remaining 5 floats.
+        Game::CamKey k{};
+        k.pos.x = std::stof(tok);
+        ss >> k.pos.y >> k.pos.z >> k.euler_deg.x >> k.euler_deg.y >> k.euler_deg.z;
+        keys.push_back(k);
+    }
+    return !keys.empty();
+}
+
+// Euler (pitch, yaw, roll) in the engine's gameplay convention such that the
+// camera at `pos` looks toward `target`. Forward maps as (sin yaw, sin pitch,
+// -cos yaw), matching how movement/look use e->yaw/e->pitch.
+static vec3 euler_deg_looking_at(const vec3& pos, const vec3& target) {
+    vec3 d = normalize(target - pos);
+    float pitch = std::asin(std::clamp(d.y, -1.0f, 1.0f));
+    float yaw   = std::atan2(d.x, -d.z);
+    return vec3(to_degrees(pitch), to_degrees(yaw), 0.0f);
+}
+
+static void build_character(Game* e) {
+    e->peds.clear();
+
+    // --- skinned character: Blender exports (res/data + res/robloxian) ----
+    e->skin = SkinnedMesh{};
+    mesh* cm = new mesh;
+    bool loaded = false;
+    if (load_obj_mesh("res/robloxian/robloxian.obj", *cm, 1.0f)) {
+        // fps only sets each clip's real-time duration (frames/fps); apply()
+        // samples by time and interpolates, so a 30 or 60 fps bake plays the
+        // same. Camera + mesh are independent clips driven off one clock.
+        loaded = e->skin.load("res/data/skin.weights",
+                              "res/data/skin.anim", *cm);
+        if (!loaded)
+            std::cout << "build_character: OBJ loaded but skin weights/anim "
+                         "missing or mismatched; using procedural fallback\n";
+    }
+    if (!loaded) {
+        build_procedural_character(*cm, e->skin);
+        std::cout << "build_character: procedural character ("
+                  << cm->vertices.size() << " verts, " << e->skin.bones
+                  << " bones, " << e->skin.frames << " frames)\n";
+    } else {
+        std::cout << "build_character: loaded rig (" << cm->vertices.size()
+                  << " verts, " << e->skin.bones << " bones, "
+                  << e->skin.frames << " frames, matched " << e->skin.matched << ")\n";
+    }
+    cm->setPosition(vec3(0.0f, 0.0f, 0.0f)); // OBJ already in world space
+    // Pose to frame 0 so the initial (static) view and the floor line up with
+    // the animation rather than with the raw bind pose.
+    if (e->skin.valid()) e->skin.apply(*cm, 0.0f);
+    e->skin_mesh = cm;
+    e->meshes["character"] = cm;
+
+    // Bounds of the (frame-0) deformed mesh: used to sit a ground plane under
+    // the feet and to aim the procedural orbit fallback.
+    vec3 lo( 1e9f,  1e9f,  1e9f), hi(-1e9f, -1e9f, -1e9f);
+    for (const auto& v : cm->vertices) {
+        lo.x = std::min(lo.x, v.p.x); lo.y = std::min(lo.y, v.p.y); lo.z = std::min(lo.z, v.p.z);
+        hi.x = std::max(hi.x, v.p.x); hi.y = std::max(hi.y, v.p.y); hi.z = std::max(hi.z, v.p.z);
+    }
+    if (lo.x > hi.x) { lo = vec3(-1, 0, -1); hi = vec3(1, 2, 1); }
+    vec3 center((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, (lo.z + hi.z) * 0.5f);
+
+    // --- static environment: a large ground plane under the character -----
+    std::vector<bvh::Tri> tris;
+    // const float G = 40.0f;
+    // add_box(tris, vec3(-G, lo.y - 0.05f, -G), vec3(G, lo.y, G),
+    //         vec3(0.16f, 0.16f, 0.18f), 0.85f);
+    load_obj("res/mall/mall.obj", vec3(0, 0, 0), 1.0f, vec3(0.8f, 0.8f, 0.8f), 0.5f, tris);
+    rebuild_field_mesh(e, tris);
+    e->static_bvh.build(std::move(tris), e->build_strategy);
+    //e->cam.setFov(40.0f);
+
+
+    // --- camera path: Blender export, else a generated orbit --------------
+    e->cam_anim_music.clear();
+    e->cam_anim_fps = 30.0f;
+    if (!load_cam_anim("res/data/cam_anim_2.txt", e->cam_keys, e->cam_anim_fps, e->cam_anim_music)) {
+        e->cam_keys.clear();
+        const int   K = 8;
+        const float R = std::max(hi.x - lo.x, hi.z - lo.z) * 1.6f + 3.0f;
+        for (int i = 0; i < K; ++i) {
+            float a = (float)i / K * 6.2831853f;
+            vec3 p(center.x + std::cos(a) * R, center.y + (hi.y - lo.y) * 0.3f,
+                   center.z + std::sin(a) * R);
+            e->cam_keys.push_back({ p, euler_deg_looking_at(p, center) });
+        }
+    }
+
+    // Frame the scene with the first camera keyframe (before pressing [P]).
+    if (!e->cam_keys.empty()) {
+        const Game::CamKey& k0 = e->cam_keys.front();
+        e->position = k0.pos;
+        e->pitch    = to_radians(k0.euler_deg.x);
+        e->yaw      = to_radians(k0.euler_deg.y);
+        e->cam.setPosition(e->position);
+        e->cam.setRotation(vec3(e->pitch, e->yaw, to_radians(k0.euler_deg.z)));
+    }
+
+    e->anim_playing = false;
+    e->anim_time    = 0.0f;
+    std::cout << "Character scene: " << e->static_bvh.triangle_count()
+              << " static tris, " << e->cam_keys.size() << " camera keys\n";
+}
+
 void rebuild_field(Game* e) {
     uint64_t t0 = SDL_GetPerformanceCounter();
+
+    // Character scene owns a mesh in e->meshes; drop it when leaving/rebuilding
+    // so other scenes don't fold a stale skinned mesh into the dynamic BVH.
+    e->meshes.erase("character");
+    delete e->skin_mesh;
+    e->skin_mesh   = nullptr;
+    e->anim_playing = false;
+    e->anim_time    = 0.0f;
 
     if      (e->scene_id == 0) build_city(e);
     else if (e->scene_id == 1) build_field(e);
     else if (e->scene_id == 2) build_pbr_test(e);
-    else                       build_cornell_box(e);
+    else if (e->scene_id == 3) build_cornell_box(e);
+    else                       build_character(e);
     e->skybox_enabled = (e->scene_id != 3);
     e->static_build_ms = (SDL_GetPerformanceCounter()-t0)*1000.0/SDL_GetPerformanceFrequency();
-#ifdef WITH_EMBREE
-    e->embree_static_dirty = true;
-#endif
+    #ifdef WITH_EMBREE
+        e->embree_static_dirty = true;
+    #endif
 
     e->emissive_tris.clear();
     for (int i = 0; i < (int)e->static_bvh.triangle_count(); ++i) {
@@ -494,7 +661,7 @@ void rebuild_field(Game* e) {
             e->emissive_tris.push_back(t);
     }
 
-    const char* sn = e->scene_id==0 ? "city" : e->scene_id==1 ? "field" : e->scene_id==2 ? "pbr_test" : "cornell";
+    const char* sn = e->scene_id==0 ? "city" : e->scene_id==1 ? "field" : e->scene_id==2 ? "pbr_test" : e->scene_id==3 ? "cornell" : "character";
     const char* bs = e->build_strategy==bvh::SAH ? "SAH"
                    : e->build_strategy==bvh::Median ? "Median" : "Morton";
     std::cout << "  -> build " << sn << " (" << bs << "): " << e->static_build_ms << " ms\n";
@@ -508,5 +675,6 @@ void rebuild_field(Game* e) {
         } else {
             ocl::set_room(nullptr, nullptr, nullptr, 0, 0);
         }
+        ocl_upload_emissive(*e);
     }
 }

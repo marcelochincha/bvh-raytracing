@@ -73,6 +73,29 @@ void draw_bvh_debug(Game* e) {
     draw_bvh(e->dynamic_bvh);
 }
 
+void draw_ray_debug(Game* e) {
+    if (!e->ray_debug.active) return;
+
+    // 1) Every box the ray tested along its path. Green = the box was hit, so
+    //    traversal DESCENDED into it; red = the box was missed, so that whole
+    //    subtree was PRUNED (this is what the demo is meant to show).
+    for (const auto& v : e->ray_debug.visited) {
+        uint32_t col = v.box_hit ? 0xFF30FF30 : 0xFF803030;
+        draw_aabb_wire(e->fb, e->cam, v.bounds, col);
+    }
+
+    // 2) The ray's bounce path on top, bright yellow, with a small marker box at
+    //    each hit point so the bounce vertices stand out.
+    const auto& p = e->ray_debug.path;
+    for (std::size_t i = 1; i < p.size(); ++i)
+        draw_gizmo_line(e->fb, e->cam, p[i - 1], p[i], 0xFFFFFF00);
+    for (std::size_t i = 1; i + 1 < p.size(); ++i) {
+        const float s = 0.03f;
+        AABB m{ p[i] - vec3(s, s, s), p[i] + vec3(s, s, s) };
+        draw_aabb_wire(e->fb, e->cam, m, 0xFFFFFF00);
+    }
+}
+
 void draw_normals_debug(Game* e) {
     const vec3  cam_pos   = e->cam._position;
     const float scale     = 0.3f;
@@ -113,7 +136,7 @@ static const char* menu_value(const Game* e, int i) {
             return "CPU SOFTWARE";
         case 2: return e->use_bvh       ? "BVH"        : "Brute force";
         case 3: return e->show_bvh      ? "On"         : "Off";
-        case 4: return e->scene_id==0 ? "City" : e->scene_id==1 ? "Spheres" : e->scene_id==2 ? "PBR Test" : "Cornell Box";
+        case 4: return e->scene_id==0 ? "City" : e->scene_id==1 ? "Spheres" : e->scene_id==2 ? "PBR Test" : e->scene_id==3 ? "Cornell Box" : "Character";
         case 5: return e->density==0    ? "Small"      : (e->density==1 ? "Medium" : "Large");
         case 6: return e->reflections   ? "On"         : "Off";
         case 7: { static char b[8]; snprintf(b,sizeof(b),"%d",e->max_bounces); return b; }
@@ -148,7 +171,7 @@ void menu_apply(Game* e, int dir) {
         }
         case 2: e->use_bvh       = !e->use_bvh;       break;
         case 3: e->show_bvh      = !e->show_bvh;      break;
-        case 4: e->scene_id = (e->scene_id+(dir<0?3:1))%4; rebuild_field(e); break;
+        case 4: e->scene_id = (e->scene_id+(dir<0?4:1))%5; rebuild_field(e); break;
         case 5: e->density  = (e->density +(dir<0?2:1))%3; rebuild_field(e); break;
         case 6: e->reflections = !e->reflections; break;
         case 7: e->max_bounces = 1+((e->max_bounces-1+(dir<0?2:1))%3); break;
