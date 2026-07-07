@@ -7,7 +7,7 @@
 \usepackage{booktabs}
 \usepackage{hyperref}
 \usepackage{geometry}
-\geometry{margin=2.0cm}
+\geometry{top=1.6cm,bottom=1.6cm,left=2.0cm,right=2.0cm}
 \usepackage{caption}
 \captionsetup{font=small}
 \hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue,citecolor=blue}
@@ -173,13 +173,12 @@ exigente} para que el \emph{build} domine: Morton solo convendría en un régime
 pocos rayos).
 
 \begin{figure}[h]\centering
-\includegraphics[width=0.50\textwidth]{fig_dynamic.png}
+\includegraphics[width=0.44\textwidth]{fig_dynamic.png}
 \caption{BVH reconstruido cada frame: costo $=$ \emph{build} (sólido) $+$
 traversal (rayado). El \emph{build} de Morton es menor, pero su traversal lo
 hunde y SAH gana el total igualmente.}
 \label{fig:dyn}
 \end{figure}
-
 \section{Conclusiones}
 Un \emph{benchmark} reproducible que, sobre la misma estructura y escena, separa
 el efecto de la heurística del efecto del hardware. SAH ofrece el mejor árbol (y
@@ -194,12 +193,16 @@ Kalos Lazo: BVH y heurísticas de construcción; Lenin Chávez: escena, sombread
 renderer multihilo; Marcelo Chincha: backend OpenCL/GPU, integración de Embree y
 \emph{benchmark}.
 
-\paragraph{Enlaces.} Repositorio: \url{https://github.com/USUARIO/bvh-raytracing}
-\quad$\bullet$\quad Video demo: \url{ENLACE} \quad$\bullet$\quad Presentación:
-\url{ENLACE}. Datos y figuras: \texttt{docs/benchmark.csv},
-\texttt{docs/fig\_*.png}, \texttt{docs/plot.py}.
+\paragraph{Enlaces.}
+\begin{itemize}\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}\setlength{\topsep}{2pt}
+  \item Repositorio: \url{https://github.com/marcelochincha/raytrec}
+  \item Video demo: \href{https://drive.google.com/file/d/1uqEXMXC3iAAqOnv-YAQSjdeJ0dVSi4E4/view?usp=sharing}{Google Drive}
+  \item Presentación: \href{https://drive.google.com/file/d/1Rf2MCSFvWEqkr26nSV0A_HS66tds9DNl/view?usp=sharing}{Google Drive}
+\end{itemize}
+\noindent{\small Datos y figuras en el repositorio: \texttt{docs/benchmark.csv},
+\texttt{docs/fig\_*.png}, \texttt{docs/plot.py}.}
 
-\begin{thebibliography}{9}\small\setlength{\itemsep}{1pt}
+\begin{thebibliography}{9}\footnotesize\setlength{\itemsep}{0pt}
 \bibitem{macdonald} J.~D. MacDonald y K.~S. Booth. \emph{Heuristics for ray
 tracing using space subdivision}. The Visual Computer, 1990.
 \bibitem{wald07} I.~Wald. \emph{On fast construction of SAH-based bounding volume
